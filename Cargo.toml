@@ -1,0 +1,19 @@
+[package]
+authors = ["Matthias Seitz <matthias.seitz@tum.de>"]
+name = "elephant"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+keywords = ["archive"]
+description = """
+Archive websites online
+"""
+
+[dependencies]
+hyper = { version = "*" }
+kuchiki = "0.7.0"
+futures = "0.1.23"
+tokio-core = "0.1.17"
+
+[badges]
+travis-ci = { repository = "mattsse/elephant" }
