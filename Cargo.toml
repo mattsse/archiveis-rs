@@ -10,10 +10,8 @@ Archive websites online
 """
 
 [dependencies]
-hyper = { version = "*" }
-kuchiki = "0.7.0"
-futures = "0.1.23"
-tokio-core = "0.1.17"
+hyper = "0.12.7"
+futures = "0.1.21"
 
 [badges]
 travis-ci = { repository = "mattsse/elephant" }
