@@ -1,6 +1,6 @@
 [package]
 authors = ["Matthias Seitz <matthias.seitz@tum.de>"]
-name = "elephant"
+name = "archiveis"
 version = "0.1.0"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
@@ -15,4 +15,4 @@ tokio-core = "0.1.17"
 futures = "0.1.21"
 
 [badges]
-travis-ci = { repository = "mattsse/elephant" }
+travis-ci = { repository = "mattsse/archiveis-rs" }
