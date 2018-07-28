@@ -64,7 +64,8 @@ impl ArchiveClient {
                 res.into_body().concat2().map(|ch| {
                     ::std::str::from_utf8(&ch).and_then(|html| {
                         Ok(html.rsplitn(2, "name=\"submitid").next().and_then(|x| {
-                            x.rsplitn(2, "value=\"")
+                            x.splitn(2, "value=\"")
+                                .skip(1)
                                 .next()
                                 .and_then(|id| id.splitn(2, "\"").next().map(|x| x.to_owned()))
                         }))

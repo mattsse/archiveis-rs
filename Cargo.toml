@@ -11,6 +11,7 @@ Archive websites online
 
 [dependencies]
 hyper = "0.12.7"
+tokio-core = "0.1.17"
 futures = "0.1.21"
 
 [badges]
