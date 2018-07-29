@@ -1,10 +1,11 @@
 # archiveis-rs
-[![Build Status](https://travis-ci.org/MattsSe/archiveis-rs.svg?branch=master)](https://travis-ci.org/MattsSe/archiveis-rs)
+[![Build Status](https://travis-ci.com/MattsSe/archiveis-rs.svg?branch=master)](https://travis-ci.com/MattsSe/archiveis-rs)
+
 Provides simple access to the Archive.is Capturing Service.
 Archive any url and get the corresponding archive.is link in return.
 
 ### Full example
-The `ArchiveClient` is build with `hyper` and therefor uses futures for its services.
+The `ArchiveClient` is build with `hyper` and is build with `futures`.
 
 ```rust
 extern crate archiveis;
