@@ -19,8 +19,12 @@
 //!
 //! let client = ArchiveClient::new(Some("archiveis (https://github.com/MattsSe/archiveis-rs)"));
 //! let url = "http://example.com/";
-//! let capture = client.capture(url).and_then(|archived| {
-//!     println!("url of archived site: {}", archived.unwrap().url);
+//! let capture = client.capture(url).and_then(|res| {
+//!     if let Some(archived) = res {
+//!         println!("targeted url: {}", archived.target_url);
+//!         println!("url of archived site: {}", archived.archived_url);
+//!         println!("archive.is submit token: {}", archived.submit_id);
+//!     }
 //!     Ok(())
 //! });
 //!
@@ -40,10 +44,14 @@ use hyper::Request;
 /// Represents a result of the capture service
 #[derive(Debug, Clone)]
 pub struct Archived {
-    /// The url to the archived site
-    pub url: String,
+    /// The requested url to archive with the archive.is capture service
+    pub target_url: String,
+    /// The archive.is url that archives the `target_url`
+    pub archived_url: String,
     /// The time stamp when the site was archived
     pub time_stamp: Option<DateTime<chrono::Utc>>,
+    /// The submitid used to authorize access on the archive.is server the archive
+    pub submit_id: String,
 }
 
 /// A Client that serves as a wrapper around the archive.is capture service
@@ -65,7 +73,7 @@ impl ArchiveClient {
         }
     }
 
-    /// invokes the archive.is capture service
+    /// Invokes the archive.is capture service.
     /// First it get's the current valid unique `submitid` by calling `get_unique_id`.
     /// Then it sends a new POST request to the archive.is submit endpoint with the `url` and the
     /// `submitid` encoded as `x-www-form-urlencoded` in the body.
@@ -76,55 +84,80 @@ impl ArchiveClient {
         &'a self,
         url: &str,
     ) -> impl Future<Item = Option<Archived>, Error = hyper::Error> + 'a {
-        use chrono::TimeZone;
-        use url::form_urlencoded;
         // TODO add lifetime constraints to url instead?
         let u = url.to_owned();
         // TODO The id is usually valid a couple minutes, perhaps caching it instead?
         self.get_unique_id().and_then(move |resp| {
             let res: Box<Future<Item = Option<Archived>, Error = hyper::Error>> = match resp {
-                Some(id) => {
-                    // encode the data for the post body
-                    let body: String = form_urlencoded::Serializer::new(String::new())
-                        .append_pair("url", u.as_str())
-                        .append_pair("anyway", "1")
-                        .append_pair("submitid", id.as_str())
-                        .finish();
-                    // prepare the POST request
-                    let req = Request::post("http://archive.is/submit/")
-                        .header("User-Agent", self.user_agent.as_str())
-                        .header("Content-Type", "application/x-www-form-urlencoded")
-                        .body(body.into())
-                        .unwrap();
-                    let capture = self.client.request(req).and_then(|resp| {
-                        // get the url of the archived page
-                        let refresh = resp.headers().get("Refresh").and_then(|x| {
-                            x.to_str()
-                                .ok()
-                                .and_then(|x| x.split('=').nth(1).map(str::to_owned))
-                        });
-                        if let Some(tiny_url) = refresh {
-                            // parse the timemap from the Date header
-                            let time_stamp = resp.headers().get("Date").and_then(|x| {
-                                x.to_str().ok().and_then(|x| {
-                                    chrono::Utc.datetime_from_str(x, "%a, %e %b %Y %T GMT").ok()
-                                })
-                            });
-                            let archived = Archived {
-                                url: tiny_url,
-                                time_stamp,
-                            };
-                            Ok(Some(archived))
-                        } else {
-                            Ok(None)
-                        }
-                    });
-                    Box::new(capture)
-                }
+                Some(id) => Box::new(self.capture_with_id(&u, id)),
                 _ => Box::new(future::ok(None)),
             };
             res
         })
+    }
+
+    /// Invokes the archive.is capture service directly without retrieving a submit id first.
+    /// This can have the advantage that no additional request is necessary, but poses potential
+    /// drawbacks when the `id` is not valid. Generally the temporarily ``` are still valid
+    /// even when the archiv.is server switched to a new one in the meantime. But it might be the
+    /// case, that the server returns a `Server Error`, then the function catches a new `submit_id`
+    /// and then tries to capture the `url` again. This is done by switching to the general `capture`
+    /// function in case of error.
+    /// There might also be the possibility, where the response body already
+    /// contains the html of the archived `url`. In that case we read the archive.is url from the
+    /// html's meta information instead.
+    pub fn capture_with_id<'a>(
+        &'a self,
+        url: &str,
+        submit_id: String,
+    ) -> impl Future<Item = Option<Archived>, Error = hyper::Error> + 'a {
+        use chrono::TimeZone;
+        use url::form_urlencoded;
+        let target_url = url.to_owned();
+        let body: String = form_urlencoded::Serializer::new(String::new())
+            .append_pair("url", target_url.as_str())
+            .append_pair("anyway", "1")
+            .append_pair("submitid", submit_id.as_str())
+            .finish();
+        // prepare the POST request
+        let req = Request::post("http://archive.is/submit/")
+            .header("User-Agent", self.user_agent.as_str())
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body.into())
+            .unwrap();
+        let capture = self.client.request(req).and_then(|resp| {
+            // get the url of the archived page
+            let refresh = resp.headers().get("Refresh").and_then(|x| {
+                x.to_str()
+                    .ok()
+                    .and_then(|x| x.split('=').nth(1).map(str::to_owned))
+            });
+            if let Some(archived_url) = refresh {
+                // parse the timemap from the Date header
+                let time_stamp = resp.headers().get("Date").and_then(|x| {
+                    x.to_str()
+                        .ok()
+                        .and_then(|x| chrono::Utc.datetime_from_str(x, "%a, %e %b %Y %T GMT").ok())
+                });
+                let archived = Archived {
+                    target_url,
+                    archived_url,
+                    time_stamp,
+                    submit_id,
+                };
+                Ok(Some(archived))
+            } else {
+                // TODO check if body is <h1>Server Error</h1> or even longer
+                //                .fold(Vec::new(), |mut acc, chunk| {
+                //                    acc.extend_from_slice(&*chunk);
+                //                    futures::future::ok::<_, Self::Error>(acc)
+                //                })
+                //                if <h1>Server Error</h1> --> call capture(
+                // else filter <meta property="og:url" content="http://archive.is/iBZrD" itemprop="url"/>
+                Ok(None)
+            }
+        });
+        Box::new(capture)
     }
 
     /// In order to submit an authorized capture request we need to first obtain a temporarily valid
