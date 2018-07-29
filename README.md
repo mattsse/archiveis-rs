@@ -22,9 +22,12 @@ fn main() {
 
  let client = ArchiveClient::new(Some("archiveis (https://github.com/MattsSe/archiveis-rs)"));
  let url = "http://example.com/";
- let capture = client.capture(url).and_then(|archived| {
-     println!("url of archived site: {}", archived.unwrap().url);
-
+ let capture = client.capture(url).and_then(|res| {
+     if let Some(archived) = res {
+        println!("targeted url: {}", archived.target_url);
+        println!("url of archived site: {}", archived.archived_url);
+        println!("archive.is submit token: {}", archived.submit_id);
+     }
      Ok(())
  });
 
