@@ -5,7 +5,7 @@ Provides simple access to the Archive.is Capturing Service.
 Archive any url and get the corresponding archive.is link in return.
 
 ### Full example
-The `ArchiveClient` is build with `hyper` and is build with `futures`.
+The `ArchiveClient` is build with `hyper` and therefor uses futures for its services.
 
 ```rust
 extern crate archiveis;
