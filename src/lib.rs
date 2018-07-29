@@ -20,7 +20,7 @@
 //! ### Full example
 //! The `ArchiveClient` is build with `hyper` and therefor uses futures for its services.
 //!
-//! ```rust,no_run
+//! ```rust
 //! extern crate archiveis;
 //! extern crate futures;
 //! extern crate tokio_core;
@@ -34,13 +34,13 @@
 //!
 //!     let client = ArchiveClient::new(Some("archiveis (https://github.com/MattsSe/archiveis-rs)"));
 //!     let url = "http://example.com/";
-//!     let get_id = client.capture(url).and_then(|archived| {
+//!     let capture = client.capture(url).and_then(|archived| {
 //!         println!("url of archived site: {}", archived.url);
 //!
 //!         Ok(())
 //!     });
 //!
-//!     core.run(get_id).unwrap();
+//!     core.run(capture).unwrap();
 //! }
 
 #![deny(warnings)]
