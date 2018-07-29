@@ -1,20 +1,22 @@
-#![allow(dead_code)]
-#![allow(unused_variables)]
+#![deny(warnings)]
+extern crate chrono;
 extern crate futures;
 extern crate hyper;
+extern crate url;
 
+use chrono::DateTime;
 use futures::future;
-use hyper::header::HeaderValue;
 use hyper::rt::{Future, Stream};
 use hyper::Client;
-use hyper::{HeaderMap, Request};
+use hyper::Request;
 
-pub enum Error {
-    Hyper(hyper::Error),
-    Uri,
+#[derive(Debug, Clone)]
+pub struct Archived {
+    pub tiny_url: String,
+    pub time_stamp: Option<DateTime<chrono::Utc>>,
 }
 
-const DOMAIN: &'static str = "http://archive.is/";
+const DOMAIN: &str = "http://archive.is/";
 
 pub struct ArchiveClient {
     client: Client<hyper::client::HttpConnector, hyper::Body>,
@@ -22,37 +24,65 @@ pub struct ArchiveClient {
 }
 
 impl ArchiveClient {
-    fn default_headers(
-        headers: &mut HeaderMap<hyper::header::HeaderValue>,
-        user_agent: &str,
-    ) -> Result<(), hyper::header::InvalidHeaderValue> {
-        headers.insert("User-Agent", HeaderValue::from_str(user_agent)?);
-        Ok(())
-    }
-
-    pub fn new(user_agent: Option<String>) -> Self {
+    pub fn new(user_agent: Option<&str>) -> Self {
         ArchiveClient {
             client: Client::new(),
-            user_agent: user_agent.unwrap_or("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/67.0.3396.99 Safari/537.36".to_owned()),
+            user_agent: user_agent.map(|x| x.to_owned()).unwrap_or_else(|| {
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/67.0.3396.99 Safari/537.36".to_owned()
+            }),
         }
     }
-    pub fn save(self, url: &str) -> Result<(), hyper::Error> {
-        //        let uri: hyper::Uri = url.parse().map_err(|_| Error::Uri)?;
-
-        // get an unique id first
-
-        let body = format!("{{\"url\": {:?} }}", url);
-        let req = Request::post("https://archive.is/submit/")
-            .header("User-Agent", self.user_agent.as_str())
-            .body(body.into())
-            .unwrap();
-
-        self.client.request(req).and_then(|req| Ok(()));
-
-        Ok(())
+    pub fn capture<'a>(
+        &'a self,
+        url: &str,
+    ) -> impl Future<Item = Option<Archived>, Error = hyper::Error> + 'a {
+        use chrono::TimeZone;
+        use url::form_urlencoded;
+        // TODO add liftime constraints to url instead?
+        let u = url.to_owned();
+        self.get_unique_id().and_then(move |resp| {
+            let res: Box<Future<Item = Option<Archived>, Error = hyper::Error>> = match resp {
+                Some(id) => {
+                    let body: String = form_urlencoded::Serializer::new(String::new())
+                        .append_pair("url", u.as_str())
+                        .append_pair("anyway", "1")
+                        .append_pair("submitid", id.as_str())
+                        .finish();
+                    let req = Request::post("http://archive.is/submit/")
+                        .header("User-Agent", self.user_agent.as_str())
+                        .header("Content-Type", "application/x-www-form-urlencoded")
+                        .body(body.into())
+                        .unwrap();
+                    let capture = self.client.request(req).and_then(|resp| {
+                        let refresh = resp.headers().get("Refresh").and_then(|x| {
+                            x.to_str()
+                                .ok()
+                                .and_then(|x| x.split('=').nth(1).map(str::to_owned))
+                        });
+                        if let Some(tiny_url) = refresh {
+                            let time_stamp = resp.headers().get("Date").and_then(|x| {
+                                x.to_str().ok().and_then(|x| {
+                                    chrono::Utc.datetime_from_str(x, "%a, %e %b %Y %T GMT").ok()
+                                })
+                            });
+                            let archived = Archived {
+                                tiny_url,
+                                time_stamp,
+                            };
+                            Ok(Some(archived))
+                        } else {
+                            Ok(None)
+                        }
+                    });
+                    Box::new(capture)
+                }
+                _ => Box::new(future::ok(None)),
+            };
+            res
+        })
     }
 
-    pub fn get_unique_id(self) -> impl Future<Item = Option<String>, Error = hyper::Error> {
+    pub fn get_unique_id(&self) -> impl Future<Item = Option<String>, Error = hyper::Error> {
         let req = Request::get(DOMAIN)
             .header("User-Agent", self.user_agent.as_str())
             .body(hyper::Body::empty())
@@ -65,9 +95,8 @@ impl ArchiveClient {
                     ::std::str::from_utf8(&ch).and_then(|html| {
                         Ok(html.rsplitn(2, "name=\"submitid").next().and_then(|x| {
                             x.splitn(2, "value=\"")
-                                .skip(1)
-                                .next()
-                                .and_then(|id| id.splitn(2, "\"").next().map(|x| x.to_owned()))
+                                .nth(1)
+                                .and_then(|id| id.splitn(2, '\"').next().map(str::to_owned))
                         }))
                     })
                 })
@@ -83,11 +112,10 @@ mod tests {
         let html = r###"type="hidden" name="submitid" value="1yPA39C6QcM84Dzspl+7s28rrAFOnliPMCiJtoP+OlTKmd5kJd21G4ucgTkx0mnZ"/>"###;
 
         let split = html.rsplitn(2, "name=\"submitid").next().and_then(|x| {
-            x.rsplitn(2, "value=\"")
-                .next()
+            x.splitn(2, "value=\"")
+                .nth(1)
                 .and_then(|id| id.splitn(2, "\"").next().map(|x| x.to_owned()))
         });
-
         assert_eq!(
             Some("1yPA39C6QcM84Dzspl+7s28rrAFOnliPMCiJtoP+OlTKmd5kJd21G4ucgTkx0mnZ".to_owned()),
             split

@@ -11,8 +11,10 @@ Archive websites online
 
 [dependencies]
 hyper = "0.12.7"
-tokio-core = "0.1.17"
 futures = "0.1.21"
+clap = { version = "2.32.0", optional = true }
+url = "1.7.1"
+chrono = "0.4.5"
 
 [badges]
 travis-ci = { repository = "mattsse/archiveis-rs" }
