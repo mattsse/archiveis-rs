@@ -1,5 +1,6 @@
 # archiveis-rs
 [![Build Status](https://travis-ci.com/MattsSe/archiveis-rs.svg?branch=master)](https://travis-ci.com/MattsSe/archiveis-rs)
+[![Released API docs](https://docs.rs/archiveis/badge.svg)](https://docs.rs/archiveis)
 
 Provides simple access to the Archive.is Capturing Service.
 Archive any url and get the corresponding archive.is link in return.
