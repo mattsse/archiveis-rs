@@ -8,40 +8,22 @@
 //! with the desired url.
 //!
 //! ### Archive a url
-//!
-//! ```rust,no_run
-//! use archiveis::{ArchiveClient,Archived};
-//! let client = ArchiveClient::new(Some("my user agent"));
-//! client.capture("https://github.com/MattsSe/archiveis-rs").and_then(|archived|{
-//!     println!("url of archived site: {}", archived.url);
-//! });
-//! ```
-//!
-//! ### Full example
 //! The `ArchiveClient` is build with `hyper` and therefor uses futures for its services.
 //!
-//! ```rust
+//! ```rust,no_run
 //! extern crate archiveis;
 //! extern crate futures;
-//! extern crate tokio_core;
 //!
 //! use archiveis::ArchiveClient;
 //! use futures::future::Future;
-//! use tokio_core::reactor::Core;
 //!
-//! fn main() {
-//!     let mut core = Core::new().unwrap();
+//! let client = ArchiveClient::new(Some("archiveis (https://github.com/MattsSe/archiveis-rs)"));
+//! let url = "http://example.com/";
+//! let capture = client.capture(url).and_then(|archived| {
+//!     println!("url of archived site: {}", archived.unwrap().url);
+//!     Ok(())
+//! });
 //!
-//!     let client = ArchiveClient::new(Some("archiveis (https://github.com/MattsSe/archiveis-rs)"));
-//!     let url = "http://example.com/";
-//!     let capture = client.capture(url).and_then(|archived| {
-//!         println!("url of archived site: {}", archived.url);
-//!
-//!         Ok(())
-//!     });
-//!
-//!     core.run(capture).unwrap();
-//! }
 
 #![deny(warnings)]
 extern crate chrono;

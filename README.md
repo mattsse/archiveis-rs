@@ -22,7 +22,7 @@ fn main() {
  let client = ArchiveClient::new(Some("archiveis (https://github.com/MattsSe/archiveis-rs)"));
  let url = "http://example.com/";
  let capture = client.capture(url).and_then(|archived| {
-     println!("url of archived site: {}", archived.url);
+     println!("url of archived site: {}", archived.unwrap().url);
 
      Ok(())
  });
