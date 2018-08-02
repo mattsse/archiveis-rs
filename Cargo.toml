@@ -3,10 +3,12 @@ authors = ["Matthias Seitz <matthias.seitz@tum.de>"]
 name = "archiveis"
 version = "0.1.1"
 license = "MIT OR Apache-2.0"
+documentation = "https://docs.rs/archiveis"
+repository = "https://github.com/mattsse/archiveis-rs"
 readme = "README.md"
 keywords = ["archive"]
 description = """
-Archive websites online
+Archive websites online using the archive.is capturing service.
 """
 
 [dependencies]

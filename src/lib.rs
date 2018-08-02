@@ -29,7 +29,7 @@
 //! });
 //!
 
-#![deny(warnings)]
+//#![deny(warnings)]
 extern crate chrono;
 extern crate futures;
 extern crate hyper;
@@ -50,7 +50,7 @@ pub struct Archived {
     pub archived_url: String,
     /// The time stamp when the site was archived
     pub time_stamp: Option<DateTime<chrono::Utc>>,
-    /// The submitid used to authorize access on the archive.is server the archive
+    /// The submitid used to authorize access on the archive.is server
     pub submit_id: String,
 }
 
@@ -89,7 +89,7 @@ impl ArchiveClient {
         // TODO The id is usually valid a couple minutes, perhaps caching it instead?
         self.get_unique_id().and_then(move |resp| {
             let res: Box<Future<Item = Option<Archived>, Error = hyper::Error>> = match resp {
-                Some(id) => Box::new(self.capture_with_id(&u, id)),
+                Some(id) => Box::new(self.capture_with_id(&u, id.as_str())),
                 _ => Box::new(future::ok(None)),
             };
             res
@@ -109,53 +109,82 @@ impl ArchiveClient {
     pub fn capture_with_id<'a>(
         &'a self,
         url: &str,
-        submit_id: String,
+        submit_id: &str,
     ) -> impl Future<Item = Option<Archived>, Error = hyper::Error> + 'a {
         use chrono::TimeZone;
         use url::form_urlencoded;
+
         let target_url = url.to_owned();
         let body: String = form_urlencoded::Serializer::new(String::new())
             .append_pair("url", target_url.as_str())
             .append_pair("anyway", "1")
-            .append_pair("submitid", submit_id.as_str())
+            .append_pair("submitid", submit_id)
             .finish();
+        let submit_id = submit_id.to_owned();
         // prepare the POST request
         let req = Request::post("http://archive.is/submit/")
             .header("User-Agent", self.user_agent.as_str())
             .header("Content-Type", "application/x-www-form-urlencoded")
             .body(body.into())
             .unwrap();
-        let capture = self.client.request(req).and_then(|resp| {
+        let capture = self.client.request(req).and_then(move |resp| {
             // get the url of the archived page
             let refresh = resp.headers().get("Refresh").and_then(|x| {
                 x.to_str()
                     .ok()
                     .and_then(|x| x.split('=').nth(1).map(str::to_owned))
             });
-            if let Some(archived_url) = refresh {
-                // parse the timemap from the Date header
-                let time_stamp = resp.headers().get("Date").and_then(|x| {
-                    x.to_str()
-                        .ok()
-                        .and_then(|x| chrono::Utc.datetime_from_str(x, "%a, %e %b %Y %T GMT").ok())
-                });
-                let archived = Archived {
-                    target_url,
-                    archived_url,
-                    time_stamp,
-                    submit_id,
-                };
-                Ok(Some(archived))
-            } else {
-                // TODO check if body is <h1>Server Error</h1> or even longer
-                //                .fold(Vec::new(), |mut acc, chunk| {
-                //                    acc.extend_from_slice(&*chunk);
-                //                    futures::future::ok::<_, Self::Error>(acc)
-                //                })
-                //                if <h1>Server Error</h1> --> call capture(
-                // else filter <meta property="og:url" content="http://archive.is/iBZrD" itemprop="url"/>
-                Ok(None)
-            }
+            let archived: Box<Future<Item = Option<Archived>, Error = hyper::Error>> = match refresh
+            {
+                Some(archived_url) => {
+                    // parse the timemap from the Date header
+                    let time_stamp = resp.headers().get("Date").and_then(|x| {
+                        x.to_str().ok().and_then(|x| {
+                            chrono::Utc.datetime_from_str(x, "%a, %e %b %Y %T GMT").ok()
+                        })
+                    });
+                    let archived = Archived {
+                        target_url,
+                        archived_url,
+                        time_stamp,
+                        submit_id,
+                    };
+                    Box::new(future::ok(Some(archived)))
+                }
+                _ => {
+                    // an err response body can be empty, contain Server Error or
+                    // can directly contain the archived site, in that case we extract the archived_url
+                    let err_resp_handling = resp.into_body().concat2().and_then(move |ch| {
+                        if let Ok(html) = ::std::str::from_utf8(&ch) {
+                            if html.starts_with("<h1>Server Error</h1>") {
+                                println!("here3");
+                                return Box::new(self.capture(target_url.as_str()))
+                                    as Box<Future<Item = Option<Archived>, Error = hyper::Error>>;
+                            }
+                            let archived_url = html
+                                .splitn(2, "<meta property=\"og:url\"")
+                                .nth(1)
+                                .and_then(|x| {
+                                    x.splitn(2, "content=\"")
+                                        .nth(1)
+                                        .and_then(|id| id.splitn(2, '\"').next().map(str::to_owned))
+                                });
+                            if let Some(archived_url) = archived_url {
+                                let archived = Archived {
+                                    target_url,
+                                    archived_url,
+                                    time_stamp: None,
+                                    submit_id,
+                                };
+                                return Box::new(future::ok(Some(archived)));
+                            }
+                        }
+                        Box::new(self.capture(target_url.as_str()))
+                    });
+                    Box::new(err_resp_handling)
+                }
+            };
+            archived
         });
         Box::new(capture)
     }
@@ -182,8 +211,7 @@ impl ArchiveClient {
                         }))
                     })
                 })
-            })
-            .and_then(|x| Ok(x.unwrap_or(None)))
+            }).and_then(|x| Ok(x.unwrap_or(None)))
     }
 }
 
