@@ -183,7 +183,7 @@ impl ArchiveClient {
             .header("Content-Type", "application/x-www-form-urlencoded")
             .body(body.into())
             .unwrap();
-        let capture = self.client.request(req).map_err(|e|Error::Hyper(e)).and_then(move |resp| {
+        let capture = self.client.request(req).map_err(Error::Hyper).and_then(move |resp| {
             // get the url of the archived page
             let refresh = resp.headers().get("Refresh").and_then(|x| {
                 x.to_str()
@@ -210,7 +210,7 @@ impl ArchiveClient {
                 _ => {
                     // an err response body can be empty, contain Server Error or
                     // can directly contain the archived site, in that case we extract the archived_url
-                    let err_resp_handling = resp.into_body().concat2().map_err(|e|Error::Hyper(e)).and_then(move |ch| {
+                    let err_resp_handling = resp.into_body().concat2().map_err(Error::Hyper).and_then(move |ch| {
                         if let Ok(html) = ::std::str::from_utf8(&ch) {
                             if html.starts_with("<h1>Server Error</h1>") {
                                 return Box::new(self.capture(target_url.as_str()))
@@ -259,11 +259,11 @@ impl ArchiveClient {
 
         self.client
             .request(req)
-            .map_err(|e| Error::Hyper(e))
+            .map_err(Error::Hyper)
             .and_then(|res| {
                 res.into_body()
                     .concat2()
-                    .map_err(|e| Error::Hyper(e))
+                    .map_err(Error::Hyper)
                     .and_then(|ch| {
                         ::std::str::from_utf8(&ch)
                             .map_err(|_| Error::MissingToken)
