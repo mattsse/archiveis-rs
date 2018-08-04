@@ -213,7 +213,6 @@ impl ArchiveClient {
                     let err_resp_handling = resp.into_body().concat2().map_err(|e|Error::Hyper(e)).and_then(move |ch| {
                         if let Ok(html) = ::std::str::from_utf8(&ch) {
                             if html.starts_with("<h1>Server Error</h1>") {
-                                println!("here3");
                                 return Box::new(self.capture(target_url.as_str()))
                                     as Box<Future<Item = Archived, Error = Error>>;
                             }
