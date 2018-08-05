@@ -40,12 +40,12 @@ fn main() {
 ### Archive mutliple urls
 
 archive.is uses a temporary token to validate a archive request.
-The `ArchiveClient` `capture` function first obtains the token via a GET request.
-The token is usually valid several minutes, and even if archive.is switches to a new token,the older ones are still valid. So if we need to archive multiple links, we can only need to obtain the token once and then invoke the capturing service directly with `capture_with_token` for each url. This can be done using the `future::join` functionality.
-In the following case the designated `join_all` function is used to get Future of a `Vec<Archived>`.
-
-An undesired sideeffect if the `join_all` is that this returns an Error if any of the futures failed.
-The Capturing service should work fine in most cases but if individual error handling is desired, the capturing futures can be wrapped inside another `Result`. In an `And_Then` we can handle those failures.
+The `ArchiveClient` `capture` function first obtains a new submit token via a GET request.
+The token is usually valid several minutes, and even if archive.is switches to a new in the
+meantime token,the older ones are still valid. So if we need to archive multiple links,
+we can only need to obtain the token once and then invoke the capturing service directly with
+`capture_with_token` for each url. `capture_all` returns a Vec of Results of every capturing
+request, so every single capture request gets executed regardless of the success of prior requests.
 
 ```rust
 extern crate archiveis;
@@ -67,28 +67,24 @@ fn main() {
         "https://crates.io",
     ];
 
-    let capture = client
-        .get_unique_token()
-        .and_then(|token| {
-            let mut futures = Vec::new();
-            for u in urls.into_iter() {
-                // optionally wrap the capturing result in another Result, to handle the failures in the next step
-                futures.push(client.capture_with_token(u, &token).then(|x| Ok(x)));
-            }
-            join_all(futures)
-        }).and_then(|archives| {
-            let failures: Vec<_> = archives.iter().map(Result::as_ref).filter(Result::is_err).map(Result::unwrap_err).collect();
-            if failures.is_empty() {
-                println!("all links successfully archived.");
-            } else {
-                for err in failures {
-                    if let archiveis::Error::MissingUrl(url) = err {
-                        println!("Failed to archive url: {}", url);
-                    }
+    let capture = client.capture_all(urls, None).and_then(|archives| {
+        let failures: Vec<_> = archives
+            .iter()
+            .map(Result::as_ref)
+            .filter(Result::is_err)
+            .map(Result::unwrap_err)
+            .collect();
+        if failures.is_empty() {
+            println!("all links successfully archived.");
+        } else {
+            for err in failures {
+                if let archiveis::Error::MissingUrl(url) = err {
+                    println!("Failed to archive url: {}", url);
                 }
             }
-            Ok(())
-        });
+        }
+        Ok(())
+    });
     core.run(capture).unwrap();
 }
 ```

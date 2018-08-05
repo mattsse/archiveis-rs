@@ -1,15 +1,20 @@
 [package]
 authors = ["Matthias Seitz <matthias.seitz@tum.de>"]
 name = "archiveis"
-version = "0.2.1"
+version = "0.2.2"
 license = "MIT OR Apache-2.0"
 documentation = "https://docs.rs/archiveis"
 repository = "https://github.com/mattsse/archiveis-rs"
 readme = "README.md"
+categories = ["command-line-utilities","api-bindings"]
 keywords = ["archive"]
 description = """
 Archive websites online using the archive.is capturing service.
 """
+autobins = false
+[[bin]]
+name = "archiver"
+path = "src/main.rs"
 
 [dependencies]
 hyper = "0.12.7"
@@ -20,4 +25,4 @@ clap = "2.32.0"
 tokio-core = "0.1.17"
 
 [badges]
-travis-ci = { repository = "mattsse/archiveis-rs" }
+travis-ci = { repository = "MattsSe/archiveis-rs" }
