@@ -28,15 +28,12 @@
 //! ```
 //! ### Archive multiple urls
 //! archive.is uses a temporary token to validate a archive request.
-//! The `ArchiveClient` `capture` function first obtains the token via a GET request.
-//! The token is usually valid several minutes, and even if archive.is switches to a new token,the
-//! older ones are still valid. So if we need to archive multiple links, we can only need to obtain
-//! the token once and then invoke the capturing service directly with `capture_with_token` for each url.
-//! This can be done using the `future::join` functionality.
-//! In the following case the designated `join_all` function is used to get Future of a `Vec<Archived>`.
-//! An undesired sideeffect if the `join_all` is that this returns an Error if any of the futures failed.
-//! The Capturing service should work fine in most cases but if individual error handling is desired, the
-//! capturing futures can be wrapped inside another `Result`. In an `And_Then` we can handle those failures.
+//! The `ArchiveClient` `capture` function first obtains a new submit token via a GET request.
+//! The token is usually valid several minutes, and even if archive.is switches to a new in the
+//! meantime token,the older ones are still valid. So if we need to archive multiple links,
+//! we can only need to obtain the token once and then invoke the capturing service directly with
+//! `capture_with_token` for each url. `capture_all` returns a Vec of Results of every capturing
+//! request, so every single capture request gets executed regardless of the success of prior requests.
 //!
 //! ```rust,no_run
 //! extern crate archiveis;
@@ -54,28 +51,24 @@
 //!     "https://crates.io",
 //! ];
 //!
-//! let capture = client
-//!     .get_unique_token()
-//!     .and_then(|token| {
-//!         let mut futures = Vec::new();
-//!         for u in urls.into_iter() {
-//!             // optionally wrap the capturing result in another Result, to handle the failures in the next step
-//!             futures.push(client.capture_with_token(u, &token).then(|x| Ok(x)));
-//!         }
-//!         join_all(futures)
-//!     }).and_then(|archives| {
-//!         let failures: Vec<_> = archives.iter().map(Result::as_ref).filter(Result::is_err).map(Result::unwrap_err).collect();
+//! let capture = client.capture_all(urls, None).and_then(|archives| {
+//!         let failures: Vec<_> = archives
+//!             .iter()
+//!             .map(Result::as_ref)
+//!             .filter(Result::is_err)
+//!             .map(Result::unwrap_err)
+//!             .collect();
 //!         if failures.is_empty() {
 //!             println!("all links successfully archived.");
 //!         } else {
-//!             for err in failures {
+//!            for err in failures {
 //!                 if let archiveis::Error::MissingUrl(url) = err {
 //!                     println!("Failed to archive url: {}", url);
 //!                 }
 //!             }
 //!         }
-//!         Ok(())
-//!     });
+//!        Ok(())
+//!    });
 //! ```
 //!
 
@@ -136,6 +129,31 @@ impl ArchiveClient {
         }
     }
 
+    /// Invokes the archive.is capture service an each url supplied.
+    /// If no token was passed, a fresh token is obtained via `get_unique_token`,
+    /// afterwards all capture requests are joined in a single future that returns
+    /// a `Vec<Result<Archived, Error>>` which holds every result of the individual
+    /// capturing requests, so every single capture request gets executed regardless
+    /// of the success of prior requests.
+    pub fn capture_all<'a>(
+        &'a self,
+        urls: Vec<&'a str>,
+        token: Option<String>,
+    ) -> impl Future<Item = Vec<Result<Archived, Error>>, Error = Error> + 'a {
+        use futures::future::join_all;
+        let get_token: Box<Future<Item = String, Error = Error>> = match token {
+            Some(t) => Box::new(future::ok(t)),
+            _ => Box::new(self.get_unique_token()),
+        };
+        get_token.and_then(move |token| {
+            let mut futures = Vec::new();
+            for url in urls {
+                futures.push(self.capture_with_token(url, &token).then(Ok));
+            }
+            join_all(futures)
+        })
+    }
+
     /// Invokes the archive.is capture service.
     /// First it get's the current valid unique `submitid` by calling `get_unique_id`.
     /// Then it sends a new POST request to the archive.is submit endpoint with the `url` and the
@@ -183,7 +201,7 @@ impl ArchiveClient {
             .header("Content-Type", "application/x-www-form-urlencoded")
             .body(body.into())
             .unwrap();
-        let capture = self.client.request(req).map_err(|e|Error::Hyper(e)).and_then(move |resp| {
+        let capture = self.client.request(req).map_err(Error::Hyper).and_then(move |resp| {
             // get the url of the archived page
             let refresh = resp.headers().get("Refresh").and_then(|x| {
                 x.to_str()
@@ -210,7 +228,7 @@ impl ArchiveClient {
                 _ => {
                     // an err response body can be empty, contain Server Error or
                     // can directly contain the archived site, in that case we extract the archived_url
-                    let err_resp_handling = resp.into_body().concat2().map_err(|e|Error::Hyper(e)).and_then(move |ch| {
+                    let err_resp_handling = resp.into_body().concat2().map_err(Error::Hyper).and_then(move |ch| {
                         if let Ok(html) = ::std::str::from_utf8(&ch) {
                             if html.starts_with("<h1>Server Error</h1>") {
                                 return Box::new(self.capture(target_url.as_str()))
@@ -259,11 +277,11 @@ impl ArchiveClient {
 
         self.client
             .request(req)
-            .map_err(|e| Error::Hyper(e))
+            .map_err(Error::Hyper)
             .and_then(|res| {
                 res.into_body()
                     .concat2()
-                    .map_err(|e| Error::Hyper(e))
+                    .map_err(Error::Hyper)
                     .and_then(|ch| {
                         ::std::str::from_utf8(&ch)
                             .map_err(|_| Error::MissingToken)
