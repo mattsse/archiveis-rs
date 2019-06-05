@@ -201,67 +201,74 @@ impl ArchiveClient {
             .header("Content-Type", "application/x-www-form-urlencoded")
             .body(body.into())
             .unwrap();
-        let capture = self.client.request(req).map_err(Error::Hyper).and_then(move |resp| {
-            // get the url of the archived page
-            let refresh = resp.headers().get("Refresh").and_then(|x| {
-                x.to_str()
-                    .ok()
-                    .and_then(|x| x.split('=').nth(1).map(str::to_owned))
-            });
-            let archived: Box<dyn Future<Item = Archived, Error = Error>> = match refresh
-            {
-                Some(archived_url) => {
-                    // parse the timemap from the Date header
-                    let time_stamp = resp.headers().get("Date").and_then(|x| {
-                        x.to_str().ok().and_then(|x| {
-                            chrono::Utc.datetime_from_str(x, "%a, %e %b %Y %T GMT").ok()
-                        })
-                    });
-                    let archived = Archived {
-                        target_url,
-                        archived_url,
-                        time_stamp,
-                        submit_token,
-                    };
-                    Box::new(future::ok(archived))
-                }
-                _ => {
-                    // an err response body can be empty, contain Server Error or
-                    // can directly contain the archived site, in that case we extract the archived_url
-                    let err_resp_handling = resp.into_body().concat2().map_err(Error::Hyper).and_then(move |ch| {
-                        if let Ok(html) = ::std::str::from_utf8(&ch) {
-                            if html.starts_with("<h1>Server Error</h1>") {
-                                return Box::new(self.capture(target_url.as_str()))
-                                    as Box<dyn Future<Item = Archived, Error = Error>>;
-                            }
-                            let archived_url = html
-                                .splitn(2, "<meta property=\"og:url\"")
-                                .nth(1)
-                                .and_then(|x| {
-                                    x.splitn(2, "content=\"")
+        let capture = self
+            .client
+            .request(req)
+            .map_err(Error::Hyper)
+            .and_then(move |resp| {
+                // get the url of the archived page
+                let refresh = resp.headers().get("Refresh").and_then(|x| {
+                    x.to_str()
+                        .ok()
+                        .and_then(|x| x.split('=').nth(1).map(str::to_owned))
+                });
+                let archived: Box<dyn Future<Item = Archived, Error = Error>> = match refresh {
+                    Some(archived_url) => {
+                        // parse the timemap from the Date header
+                        let time_stamp = resp.headers().get("Date").and_then(|x| {
+                            x.to_str().ok().and_then(|x| {
+                                chrono::Utc.datetime_from_str(x, "%a, %e %b %Y %T GMT").ok()
+                            })
+                        });
+                        let archived = Archived {
+                            target_url,
+                            archived_url,
+                            time_stamp,
+                            submit_token,
+                        };
+                        Box::new(future::ok(archived))
+                    }
+                    _ => {
+                        // an err response body can be empty, contain Server Error or
+                        // can directly contain the archived site, in that case we extract the archived_url
+                        let err_resp_handling = resp
+                            .into_body()
+                            .concat2()
+                            .map_err(Error::Hyper)
+                            .and_then(move |ch| {
+                                if let Ok(html) = ::std::str::from_utf8(&ch) {
+                                    if html.starts_with("<h1>Server Error</h1>") {
+                                        return Box::new(self.capture(target_url.as_str()))
+                                            as Box<dyn Future<Item = Archived, Error = Error>>;
+                                    }
+                                    let archived_url = html
+                                        .splitn(2, "<meta property=\"og:url\"")
                                         .nth(1)
-                                        .and_then(|id| id.splitn(2, '\"').next().map(str::to_owned))
-                                });
-                            if let Some(archived_url) = archived_url {
-                                let archived = Archived {
-                                    target_url,
-                                    archived_url,
-                                    time_stamp: None,
-                                    submit_token,
-                                };
-                                return Box::new(future::ok(archived));
-                            }
-                        }
-                        // TODO possible cycle: calling self.capture can cause an undesired loop
-                        // Box::new(self.capture(target_url.as_str()))
-                        // return an Error instead
-                        Box::new(future::err(Error::MissingUrl(target_url)))
-                    });
-                    Box::new(err_resp_handling)
-                }
-            };
-            archived
-        });
+                                        .and_then(|x| {
+                                            x.splitn(2, "content=\"").nth(1).and_then(|id| {
+                                                id.splitn(2, '\"').next().map(str::to_owned)
+                                            })
+                                        });
+                                    if let Some(archived_url) = archived_url {
+                                        let archived = Archived {
+                                            target_url,
+                                            archived_url,
+                                            time_stamp: None,
+                                            submit_token,
+                                        };
+                                        return Box::new(future::ok(archived));
+                                    }
+                                }
+                                // TODO possible cycle: calling self.capture can cause an undesired loop
+                                // Box::new(self.capture(target_url.as_str()))
+                                // return an Error instead
+                                Box::new(future::err(Error::MissingUrl(target_url)))
+                            });
+                        Box::new(err_resp_handling)
+                    }
+                };
+                archived
+            });
         Box::new(capture)
     }
 
@@ -292,7 +299,8 @@ impl ArchiveClient {
                                         x.splitn(2, "value=\"").nth(1).and_then(|token| {
                                             token.splitn(2, '\"').next().map(str::to_owned)
                                         })
-                                    }).ok_or(Error::MissingToken)
+                                    })
+                                    .ok_or(Error::MissingToken)
                             })
                     })
             })
