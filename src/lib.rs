@@ -158,9 +158,16 @@ impl ArchiveClient {
     pub fn capture<'a>(&'a self, url: &str) -> impl Future<Item = Archived, Error = Error> + 'a {
         // TODO add lifetime constraints to url instead?
         let u = url.to_string();
-        // TODO The id is usually valid a couple minutes, perhaps caching it instead?
         self.get_unique_token()
             .and_then(move |id| self.capture_with_token(&u, id.as_str()))
+    }
+
+    pub fn capp(
+        self,
+        url: &str,
+        submit_token: &str,
+    ) -> Box<Future<Item = Archived, Error = Error>> {
+        unimplemented!()
     }
 
     /// Invokes the archive.is capture service directly without retrieving a submit id first.
@@ -178,7 +185,7 @@ impl ArchiveClient {
         &'a self,
         url: &str,
         submit_token: &str,
-    ) -> impl Future<Item = Archived, Error = Error> + 'a {
+    ) -> Box<Future<Item = Archived, Error = Error> + 'a> {
         use chrono::TimeZone;
 
         let target_url = url.to_string();

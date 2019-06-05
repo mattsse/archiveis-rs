@@ -24,10 +24,11 @@ url = "1.7"
 chrono = "0.4"
 clap = "2.33"
 structopt = { version = "0.2", optional = true }
+tokio = { version = "0.1.21", optional = true }
 
 
 [badges]
 travis-ci = { repository = "MattsSe/archiveis-rs" }
 
 [features]
-cli = ["structopt"]
+cli = ["structopt", "tokio"]
