@@ -10,14 +10,14 @@
 //! ### Archive a url
 //! The `ArchiveClient` is build with `hyper` and therefor uses futures for its services.
 //!
-//! ```rust,no_run
+//! ```edition2018
 //! extern crate archiveis;
 //! extern crate futures;
 //!
 //! use archiveis::ArchiveClient;
 //! use futures::future::Future;
 //!
-//! let client = ArchiveClient::new(Some("archiveis (https://github.com/MattsSe/archiveis-rs)"));
+//! let client = ArchiveClient::default();
 //! let url = "http://example.com/";
 //! let capture = client.capture(url).and_then(|archived| {
 //!     println!("targeted url: {}", archived.target_url);
@@ -35,14 +35,14 @@
 //! `capture_with_token` for each url. `capture_all` returns a Vec of Results of every capturing
 //! request, so every single capture request gets executed regardless of the success of prior requests.
 //!
-//! ```rust,no_run
+//! ```edition2018
 //! extern crate archiveis;
 //! extern crate futures;
 //!
 //! use archiveis::ArchiveClient;
-//! use futures::future::{join_all, Future};
+//! use futures::future::{ Future};
 //!
-//! let client = ArchiveClient::new(Some("archiveis (https://github.com/MattsSe/archiveis-rs)"));
+//! let client = ArchiveClient::default();
 //!
 //! // the urls to capture
 //! let urls = vec![
@@ -52,23 +52,24 @@
 //! ];
 //!
 //! let capture = client.capture_all(urls, None).and_then(|archives| {
-//!         let failures: Vec<_> = archives
-//!             .iter()
-//!             .map(Result::as_ref)
-//!             .filter(Result::is_err)
-//!             .map(Result::unwrap_err)
-//!             .collect();
+//!          let (archived, failures): (Vec<_>, Vec<_>) = archives
+//!             .into_iter()
+//!             .partition(Result::is_ok);
+//!         let archived: Vec<_> = archived.into_iter().map(Result::unwrap).collect();
+//!         let failures: Vec<_> = failures.into_iter().map(Result::unwrap_err).collect();
 //!         if failures.is_empty() {
 //!             println!("all links successfully archived.");
 //!         } else {
-//!            for err in failures {
+//!            for err in &failures {
 //!                 if let archiveis::Error::MissingUrl(url) = err {
 //!                     println!("Failed to archive url: {}", url);
 //!                 }
 //!             }
 //!         }
-//!        Ok(())
+//!        Ok((archived, failures))
 //!    });
+//!
+//! capture.wait();
 //! ```
 //!
 
@@ -134,17 +135,16 @@ impl ArchiveClient {
         urls: Vec<&'a str>,
         token: Option<String>,
     ) -> impl Future<Item = Vec<Result<Archived, Error>>, Error = Error> + 'a {
-        use futures::future::join_all;
         let get_token: Box<dyn Future<Item = String, Error = Error>> = match token {
             Some(t) => Box::new(future::ok(t)),
             _ => Box::new(self.get_unique_token()),
         };
         get_token.and_then(move |token| {
-            let mut futures = Vec::new();
-            for url in urls {
-                futures.push(self.capture_with_token(url, &token).then(Ok));
-            }
-            join_all(futures)
+            future::join_all(
+                urls.into_iter()
+                    .map(|url| self.capture_with_token(url, &token).then(Ok))
+                    .collect::<Vec<_>>(),
+            )
         })
     }
 
@@ -181,7 +181,7 @@ impl ArchiveClient {
     ) -> impl Future<Item = Archived, Error = Error> + 'a {
         use chrono::TimeZone;
 
-        let target_url = url.to_owned();
+        let target_url = url.to_string();
         let body: String = url::form_urlencoded::Serializer::new(String::new())
             .append_pair("url", &target_url)
             .append_pair("anyway", "1")
@@ -302,10 +302,7 @@ impl ArchiveClient {
 
 impl Default for ArchiveClient {
     fn default() -> Self {
-        ArchiveClient {
-            client: Client::new(),
-            user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/67.0.3396.99 Safari/537.36".to_string()
-        }
+        ArchiveClient::new( "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/67.0.3396.99 Safari/537.36")
     }
 }
 
