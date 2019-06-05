@@ -148,6 +148,47 @@ impl ArchiveClient {
         })
     }
 
+    /// Invokes the archive.is capture service an each url supplied.
+    /// If no token was passed, a fresh token is obtained via `get_unique_token`,
+    /// afterwards all capture requests are joined in a single future that returns
+    /// a `Vec<Result<Archived, Error>>` which holds every result of the individual
+    /// capturing requests, so every single capture request gets executed regardless
+    /// of the success of prior requests.
+    pub fn capture_all_safe<T: Into<String>>(
+        self,
+        urls: &[T],
+        token: Option<String>,
+    ) -> Box<Future<Item = (Self, Vec<Result<Archived, Error>>), Error = Error>> {
+        let get_token: Box<dyn Future<Item = (Self, String), Error = Error>> = match token {
+            Some(t) => Box::new(future::ok((self, t))),
+            _ => Box::new(self.get_unique_token_safe()),
+        };
+
+//                urls.into_iter()
+//                    .fold(get_token, |fut, url|{
+//                        fut.and_then((client, token){
+//                            client.capture_with_token_safe(url, )
+//                        })
+//
+//                    })
+        //            .map(|url| self.capture_with_token(url, &token).then(Ok))
+        //            .collect::<Vec<_>>(),
+        //
+        ////        get_token.and_then(move |token| {
+        //            future::join_all(
+        //
+        //            )
+        //        })
+
+        unimplemented!()
+    }
+
+    pub fn capture<'a>(&'a self, url: &str) -> impl Future<Item = Archived, Error = Error> + 'a {
+        let u = url.to_string();
+        self.get_unique_token()
+            .and_then(move |id| self.capture_with_token(&u, id.as_str()))
+    }
+
     /// Invokes the archive.is capture service.
     /// First it get's the current valid unique `submitid` by calling `get_unique_id`.
     /// Then it sends a new POST request to the archive.is submit endpoint with the `url` and the
@@ -155,19 +196,127 @@ impl ArchiveClient {
     /// The link to the archived page is then contained in the `Refresh` header of the Response.
     /// It also tries to parse the timemap from the `Date` header and packs it together with the url
     /// in a new `Archived` instance.
-    pub fn capture<'a>(&'a self, url: &str) -> impl Future<Item = Archived, Error = Error> + 'a {
-        // TODO add lifetime constraints to url instead?
-        let u = url.to_string();
-        self.get_unique_token()
-            .and_then(move |id| self.capture_with_token(&u, id.as_str()))
+    pub fn capture_safe<T: Into<String> + 'static>(
+        self,
+        url: T,
+    ) -> Box<dyn Future<Item = (Self, Archived), Error = Error>> {
+        Box::new(
+            self.get_unique_token_safe()
+                .and_then(|(client, id)| client.capture_with_token_safe(url.into(), id)),
+        )
     }
 
-    pub fn capp(
+    /// Invokes the archive.is capture service directly without retrieving a submit id first.
+    /// This can have the advantage that no additional request is necessary, but poses potential
+    /// drawbacks when the `id` is not valid. Generally the temporarily ``` are still valid
+    /// even when the archiv.is server switched to a new one in the meantime. But it might be the
+    /// case, that the server returns a `Server Error`, In that case a `Error::MissingUrl(url)` is
+    /// returned containing the requested url.
+    /// Switching to the ordinary `capture` method would also be possible but that could result in
+    /// undesired cyclic behavior.
+    /// There might also be the possibility, where the response body already
+    /// contains the html of the archived `url`. In that case we read the archive.is url from the
+    /// html's meta information instead.
+    pub fn capture_with_token_safe<T: Into<String>>(
         self,
-        url: &str,
-        submit_token: &str,
-    ) -> Box<Future<Item = Archived, Error = Error>> {
-        unimplemented!()
+        url: T,
+        submit_token: T,
+    ) -> Box<dyn Future<Item = (Self, Archived), Error = Error>> {
+        use chrono::TimeZone;
+
+        let target_url = url.into();
+        let submit_token = submit_token.into();
+        let body: String = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("url", &target_url)
+            .append_pair("anyway", "1")
+            .append_pair("submitid", &submit_token)
+            .finish();
+
+        // prepare the POST request
+        let req = Request::post("http://archive.is/submit/")
+            .header("User-Agent", self.user_agent.as_str())
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body.into())
+            .unwrap();
+
+        let capture = self
+            .client
+            .request(req)
+            .map_err(Error::Hyper)
+            .and_then(|resp| {
+                // get the url of the archived page
+                let refresh = resp.headers().get("Refresh").and_then(|x| {
+                    x.to_str()
+                        .ok()
+                        .and_then(|x| x.split('=').nth(1).map(str::to_owned))
+                });
+
+                let archived: Box<dyn Future<Item = (Self, Archived), Error = Error>> =
+                    match refresh {
+                        Some(archived_url) => {
+                            // parse the timemap from the Date header
+                            let time_stamp = resp.headers().get("Date").and_then(|x| {
+                                x.to_str().ok().and_then(|x| {
+                                    chrono::Utc.datetime_from_str(x, "%a, %e %b %Y %T GMT").ok()
+                                })
+                            });
+                            let archived = Archived {
+                                target_url,
+                                archived_url,
+                                time_stamp,
+                                submit_token,
+                            };
+                            Box::new(future::ok((self, archived)))
+                        }
+
+                        _ => {
+                            // an err response body can be empty, contain Server Error or
+                            // can directly contain the archived site, in that case we extract the archived_url
+                            let err_resp_handling = resp
+                                .into_body()
+                                .concat2()
+                                .map_err(Error::Hyper)
+                                .and_then(|ch| {
+                                    if let Ok(html) = ::std::str::from_utf8(&ch) {
+                                        if html.starts_with("<h1>Server Error</h1>") {
+                                            return Box::new(self.capture_safe(target_url))
+                                                as Box<
+                                                    dyn Future<
+                                                        Item = (Self, Archived),
+                                                        Error = Error,
+                                                    >,
+                                                >;
+                                        }
+                                        let archived_url = html
+                                            .splitn(2, "<meta property=\"og:url\"")
+                                            .nth(1)
+                                            .and_then(|x| {
+                                                x.splitn(2, "content=\"").nth(1).and_then(|id| {
+                                                    id.splitn(2, '\"').next().map(str::to_owned)
+                                                })
+                                            });
+                                        if let Some(archived_url) = archived_url {
+                                            let archived = Archived {
+                                                target_url,
+                                                archived_url,
+                                                time_stamp: None,
+                                                submit_token,
+                                            };
+                                            return Box::new(future::ok((self, archived)));
+                                        }
+                                    }
+                                    // TODO possible cycle: calling self.capture can cause an undesired loop
+                                    // Box::new(self.capture(target_url.as_str()))
+                                    // return an Error instead
+                                    Box::new(future::err(Error::MissingUrl(target_url)))
+                                });
+                            Box::new(err_resp_handling)
+                        }
+                    };
+                archived
+            });
+
+        Box::new(capture)
     }
 
     /// Invokes the archive.is capture service directly without retrieving a submit id first.
@@ -185,7 +334,7 @@ impl ArchiveClient {
         &'a self,
         url: &str,
         submit_token: &str,
-    ) -> Box<Future<Item = Archived, Error = Error> + 'a> {
+    ) -> Box<dyn Future<Item = Archived, Error = Error> + 'a> {
         use chrono::TimeZone;
 
         let target_url = url.to_string();
@@ -195,12 +344,14 @@ impl ArchiveClient {
             .append_pair("submitid", submit_token)
             .finish();
         let submit_token = submit_token.to_owned();
+
         // prepare the POST request
         let req = Request::post("http://archive.is/submit/")
             .header("User-Agent", self.user_agent.as_str())
             .header("Content-Type", "application/x-www-form-urlencoded")
             .body(body.into())
             .unwrap();
+
         let capture = self
             .client
             .request(req)
@@ -276,6 +427,48 @@ impl ArchiveClient {
     /// unique token.
     /// This is achieved by sending a GET request to the archive.is domain and parsing the `
     /// `submitid` from the responding html.
+    pub fn get_unique_token_safe(self) -> impl Future<Item = (Self, String), Error = Error> {
+        let req = Request::get("http://archive.is/")
+            .header("User-Agent", self.user_agent.as_str())
+            .body(hyper::Body::empty())
+            .unwrap();
+
+        self.client
+            .request(req)
+            .map_err(Error::Hyper)
+            .and_then(|res| {
+                res.into_body()
+                    .concat2()
+                    .map_err(Error::Hyper)
+                    .and_then(|ch| {
+                        ::std::str::from_utf8(&ch)
+                            .map_err(|_| Error::MissingToken)
+                            .and_then(|html| {
+                                if let Some(token) = html
+                                    .rsplitn(2, "name=\"submitid")
+                                    .filter_map(|x| {
+                                        x.splitn(2, "value=\"")
+                                            .skip(1)
+                                            .filter_map(|token| {
+                                                token.splitn(2, '\"').next().map(str::to_owned)
+                                            })
+                                            .next()
+                                    })
+                                    .next()
+                                {
+                                    Ok((self, token))
+                                } else {
+                                    Err(Error::MissingToken)
+                                }
+                            })
+                    })
+            })
+    }
+
+    /// In order to submit an authorized capture request we need to first obtain a temporarily valid
+    /// unique token.
+    /// This is achieved by sending a GET request to the archive.is domain and parsing the `
+    /// `submitid` from the responding html.
     pub fn get_unique_token(&self) -> impl Future<Item = String, Error = Error> {
         let req = Request::get("http://archive.is/")
             .header("User-Agent", self.user_agent.as_str())
@@ -297,7 +490,7 @@ impl ArchiveClient {
                                     .next()
                                     .and_then(|x| {
                                         x.splitn(2, "value=\"").nth(1).and_then(|token| {
-                                            token.splitn(2, '\"').next().map(str::to_owned)
+                                            token.splitn(2, '\"').next().map(str::to_string)
                                         })
                                     })
                                     .ok_or(Error::MissingToken)
@@ -319,13 +512,17 @@ mod tests {
     fn extract_unique_token() {
         let html = r###"type="hidden" name="submitid" value="1yPA39C6QcM84Dzspl+7s28rrAFOnliPMCiJtoP+OlTKmd5kJd21G4ucgTkx0mnZ"/>"###;
 
-        let split = html.rsplitn(2, "name=\"submitid").next().and_then(|x| {
-            x.splitn(2, "value=\"")
-                .nth(1)
-                .and_then(|id| id.splitn(2, "\"").next().map(|x| x.to_owned()))
-        });
+        let split = html
+            .rsplitn(2, "name=\"submitid")
+            .filter_map(|x| {
+                x.splitn(2, "value=\"")
+                    .skip(1)
+                    .filter_map(|token| token.splitn(2, '\"').next())
+                    .next()
+            })
+            .next();
         assert_eq!(
-            Some("1yPA39C6QcM84Dzspl+7s28rrAFOnliPMCiJtoP+OlTKmd5kJd21G4ucgTkx0mnZ".to_owned()),
+            Some("1yPA39C6QcM84Dzspl+7s28rrAFOnliPMCiJtoP+OlTKmd5kJd21G4ucgTkx0mnZ"),
             split
         );
     }
