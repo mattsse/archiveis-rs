@@ -72,11 +72,7 @@
 //! ```
 //!
 
-#![deny(warnings)]
-extern crate chrono;
-extern crate futures;
-extern crate hyper;
-extern crate url;
+//#![deny(warnings)]
 
 use chrono::DateTime;
 use futures::future;
@@ -92,7 +88,7 @@ pub enum Error {
     Hyper(hyper::Error),
     /// Means that no token could be obtained from archive.is
     MissingToken,
-    /// Means that the POST was successfull but no archive url to the requested
+    /// Means that the POST was successful but no archive url to the requested
     /// url, which `MissingUrl` stores, could be obtained from the HTTP response
     MissingUrl(String),
 }
@@ -119,13 +115,11 @@ pub struct ArchiveClient {
 }
 
 impl ArchiveClient {
-    /// Creates a new instance of the `ArchiveClient` using the provided user agent or a dummy one.
-    pub fn new(user_agent: Option<&str>) -> Self {
+    /// Creates a new instance of the `ArchiveClient` using a special user agent
+    pub fn new<T: Into<String>>(user_agent: T) -> Self {
         ArchiveClient {
             client: Client::new(),
-            user_agent: user_agent.map(|x| x.to_owned()).unwrap_or_else(|| {
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/67.0.3396.99 Safari/537.36".to_owned()
-            }),
+            user_agent: user_agent.into(),
         }
     }
 
@@ -163,7 +157,7 @@ impl ArchiveClient {
     /// in a new `Archived` instance.
     pub fn capture<'a>(&'a self, url: &str) -> impl Future<Item = Archived, Error = Error> + 'a {
         // TODO add lifetime constraints to url instead?
-        let u = url.to_owned();
+        let u = url.to_string();
         // TODO The id is usually valid a couple minutes, perhaps caching it instead?
         self.get_unique_token()
             .and_then(move |id| self.capture_with_token(&u, id.as_str()))
@@ -186,11 +180,10 @@ impl ArchiveClient {
         submit_token: &str,
     ) -> impl Future<Item = Archived, Error = Error> + 'a {
         use chrono::TimeZone;
-        use url::form_urlencoded;
 
         let target_url = url.to_owned();
-        let body: String = form_urlencoded::Serializer::new(String::new())
-            .append_pair("url", target_url.as_str())
+        let body: String = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("url", &target_url)
             .append_pair("anyway", "1")
             .append_pair("submitid", submit_token)
             .finish();
@@ -304,6 +297,15 @@ impl ArchiveClient {
                             })
                     })
             })
+    }
+}
+
+impl Default for ArchiveClient {
+    fn default() -> Self {
+        ArchiveClient {
+            client: Client::new(),
+            user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/67.0.3396.99 Safari/537.36".to_string()
+        }
     }
 }
 

@@ -11,7 +11,7 @@ keywords = ["archive"]
 description = """
 Archive websites online using the archive.is capturing service.
 """
-
+edition = "2018"
 [[bin]]
 name = "archiver"
 path = "src/archiver.rs"
