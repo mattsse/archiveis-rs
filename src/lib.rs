@@ -141,7 +141,7 @@ impl ArchiveClient {
         token: Option<String>,
     ) -> impl Future<Item = Vec<Result<Archived, Error>>, Error = Error> + 'a {
         use futures::future::join_all;
-        let get_token: Box<Future<Item = String, Error = Error>> = match token {
+        let get_token: Box<dyn Future<Item = String, Error = Error>> = match token {
             Some(t) => Box::new(future::ok(t)),
             _ => Box::new(self.get_unique_token()),
         };
@@ -208,7 +208,7 @@ impl ArchiveClient {
                     .ok()
                     .and_then(|x| x.split('=').nth(1).map(str::to_owned))
             });
-            let archived: Box<Future<Item = Archived, Error = Error>> = match refresh
+            let archived: Box<dyn Future<Item = Archived, Error = Error>> = match refresh
             {
                 Some(archived_url) => {
                     // parse the timemap from the Date header
@@ -232,7 +232,7 @@ impl ArchiveClient {
                         if let Ok(html) = ::std::str::from_utf8(&ch) {
                             if html.starts_with("<h1>Server Error</h1>") {
                                 return Box::new(self.capture(target_url.as_str()))
-                                    as Box<Future<Item = Archived, Error = Error>>;
+                                    as Box<dyn Future<Item = Archived, Error = Error>>;
                             }
                             let archived_url = html
                                 .splitn(2, "<meta property=\"og:url\"")
