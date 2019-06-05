@@ -11,18 +11,23 @@ keywords = ["archive"]
 description = """
 Archive websites online using the archive.is capturing service.
 """
-autobins = false
+
 [[bin]]
 name = "archiver"
-path = "src/main.rs"
+path = "src/archiver.rs"
+required-features = ["cli"]
 
 [dependencies]
-hyper = "0.12.7"
-futures = "0.1.21"
-url = "1.7.1"
-chrono = "0.4.5"
-clap = "2.32.0"
-tokio-core = "0.1.17"
+hyper = "0.12"
+futures = "0.1"
+url = "1.7"
+chrono = "0.4"
+clap = "2.33"
+structopt = { version = "0.2", optional = true }
+
 
 [badges]
 travis-ci = { repository = "MattsSe/archiveis-rs" }
+
+[features]
+cli = ["structopt"]
