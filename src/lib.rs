@@ -94,6 +94,8 @@ pub enum Error {
     MissingUrl(String),
 }
 
+type Result<T> = ::std::result::Result<T, Error>;
+
 /// Represents a result of the capture service
 #[derive(Debug, Clone)]
 pub struct Archived {
@@ -134,7 +136,7 @@ impl ArchiveClient {
         &'a self,
         urls: Vec<&'a str>,
         token: Option<String>,
-    ) -> impl Future<Item = Vec<Result<Archived, Error>>, Error = Error> + 'a {
+    ) -> impl Future<Item = Vec<Result<Archived>>, Error = Error> + 'a {
         let get_token: Box<dyn Future<Item = String, Error = Error>> = match token {
             Some(t) => Box::new(future::ok(t)),
             _ => Box::new(self.get_unique_token()),
@@ -156,31 +158,44 @@ impl ArchiveClient {
     /// of the success of prior requests.
     pub fn capture_all_safe<T: Into<String>>(
         self,
-        urls: &[T],
+        urls: Vec<String>,
         token: Option<String>,
-    ) -> Box<Future<Item = (Self, Vec<Result<Archived, Error>>), Error = Error>> {
-        let get_token: Box<dyn Future<Item = (Self, String), Error = Error>> = match token {
-            Some(t) => Box::new(future::ok((self, t))),
+    ) -> Box<dyn Future<Item = (Self, Vec<Result<Archived>>), Error = Error>> {
+        let get_token: Box<dyn Future<Item = (Self, Result<String>), Error = Error>> = match token {
+            Some(t) => Box::new(future::ok((self, Ok(t)))),
             _ => Box::new(self.get_unique_token_safe()),
         };
 
-//                urls.into_iter()
-//                    .fold(get_token, |fut, url|{
-//                        fut.and_then((client, token){
-//                            client.capture_with_token_safe(url, )
-//                        })
-//
-//                    })
-        //            .map(|url| self.capture_with_token(url, &token).then(Ok))
-        //            .collect::<Vec<_>>(),
-        //
-        ////        get_token.and_then(move |token| {
-        //            future::join_all(
-        //
-        //            )
-        //        })
+        let len = urls.len();
 
-        unimplemented!()
+        let init: Box<
+            dyn Future<Item = (Self, Result<String>, Vec<Result<Archived>>), Error = Error>,
+        > = Box::new(
+            get_token.and_then(move |(client, token)| Ok((client, token, Vec::with_capacity(len)))),
+        );
+
+        let capture_all = urls.into_iter().fold(init, |fut, url| {
+            Box::new(fut.and_then(move |(client, token, mut results)| {
+                let capture: Box<
+                    dyn Future<Item = (Self, Result<String>, Vec<Result<Archived>>), Error = Error>,
+                > = match token {
+                    Ok(token) => Box::new(
+                        client
+                            .capture_with_token_safe(url.clone(), token.clone())
+                            .and_then(|(client, archived)| {
+                                results.push(archived);
+                                Ok((client, Ok(token), results))
+                            }),
+                    ),
+                    _ => {
+                        results.push(Err(Error::MissingToken));
+                        Box::new(future::ok((client, Err(Error::MissingToken), results)))
+                    }
+                };
+                capture
+            }))
+        });
+        Box::new(capture_all.and_then(|(client, _, results)| Ok((client, results))))
     }
 
     pub fn capture<'a>(&'a self, url: &str) -> impl Future<Item = Archived, Error = Error> + 'a {
@@ -199,11 +214,14 @@ impl ArchiveClient {
     pub fn capture_safe<T: Into<String> + 'static>(
         self,
         url: T,
-    ) -> Box<dyn Future<Item = (Self, Archived), Error = Error>> {
-        Box::new(
-            self.get_unique_token_safe()
-                .and_then(|(client, id)| client.capture_with_token_safe(url.into(), id)),
-        )
+    ) -> Box<dyn Future<Item = (Self, Result<Archived>), Error = Error>> {
+        Box::new(self.get_unique_token_safe().and_then(|(client, token)| {
+            if let Ok(token) = token {
+                client.capture_with_token_safe(url.into(), token)
+            } else {
+                Box::new(future::ok((client, Err(Error::MissingToken))))
+            }
+        }))
     }
 
     /// Invokes the archive.is capture service directly without retrieving a submit id first.
@@ -221,7 +239,7 @@ impl ArchiveClient {
         self,
         url: T,
         submit_token: T,
-    ) -> Box<dyn Future<Item = (Self, Archived), Error = Error>> {
+    ) -> Box<dyn Future<Item = (Self, Result<Archived>), Error = Error>> {
         use chrono::TimeZone;
 
         let target_url = url.into();
@@ -251,7 +269,7 @@ impl ArchiveClient {
                         .and_then(|x| x.split('=').nth(1).map(str::to_owned))
                 });
 
-                let archived: Box<dyn Future<Item = (Self, Archived), Error = Error>> =
+                let archived: Box<dyn Future<Item = (Self, Result<Archived>), Error = Error>> =
                     match refresh {
                         Some(archived_url) => {
                             // parse the timemap from the Date header
@@ -266,7 +284,7 @@ impl ArchiveClient {
                                 time_stamp,
                                 submit_token,
                             };
-                            Box::new(future::ok((self, archived)))
+                            Box::new(future::ok((self, Ok(archived))))
                         }
 
                         _ => {
@@ -282,7 +300,7 @@ impl ArchiveClient {
                                             return Box::new(self.capture_safe(target_url))
                                                 as Box<
                                                     dyn Future<
-                                                        Item = (Self, Archived),
+                                                        Item = (Self, Result<Archived>),
                                                         Error = Error,
                                                     >,
                                                 >;
@@ -302,13 +320,13 @@ impl ArchiveClient {
                                                 time_stamp: None,
                                                 submit_token,
                                             };
-                                            return Box::new(future::ok((self, archived)));
+                                            return Box::new(future::ok((self, Ok(archived))));
                                         }
                                     }
                                     // TODO possible cycle: calling self.capture can cause an undesired loop
                                     // Box::new(self.capture(target_url.as_str()))
                                     // return an Error instead
-                                    Box::new(future::err(Error::MissingUrl(target_url)))
+                                    Box::new(future::ok((self, Err(Error::MissingUrl(target_url)))))
                                 });
                             Box::new(err_resp_handling)
                         }
@@ -427,7 +445,9 @@ impl ArchiveClient {
     /// unique token.
     /// This is achieved by sending a GET request to the archive.is domain and parsing the `
     /// `submitid` from the responding html.
-    pub fn get_unique_token_safe(self) -> impl Future<Item = (Self, String), Error = Error> {
+    pub fn get_unique_token_safe(
+        self,
+    ) -> impl Future<Item = (Self, Result<String>), Error = Error> {
         let req = Request::get("http://archive.is/")
             .header("User-Agent", self.user_agent.as_str())
             .body(hyper::Body::empty())
@@ -456,9 +476,9 @@ impl ArchiveClient {
                                     })
                                     .next()
                                 {
-                                    Ok((self, token))
+                                    Ok((self, Ok(token)))
                                 } else {
-                                    Err(Error::MissingToken)
+                                    Ok((self, Err(Error::MissingToken)))
                                 }
                             })
                     })
