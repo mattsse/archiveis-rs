@@ -1,96 +1,144 @@
 # archiveis-rs
 
 [![Build Status](https://travis-ci.com/MattsSe/archiveis-rs.svg?branch=master)](https://travis-ci.com/MattsSe/archiveis-rs)
-[![Released API docs](https://docs.rs/archiveis/badge.svg)](https://docs.rs/archiveis)
+[![Crates.io](https://img.shields.io/crates/v/archiveis.svg)](https://crates.io/crates/archiveis)
+[![Documentation](https://docs.rs/archiveis/badge.svg)](https://docs.rs/archiveis)
 
 Provides simple access to the Archive.is Capturing Service.
 Archive any url and get the corresponding archive.is link in return.
 
 ## Examples
 
-The `ArchiveClient` is build with `hyper` and therefor uses futures for its services.
-
-### Archive single url
+The `ArchiveClient` is build with `hyper` and uses futures for capturing archive.is links.
 
 ```rust
 extern crate archiveis;
-extern crate futures;
-extern crate tokio_core;
-
+extern crate hyper;
+use hyper::rt::Future;
 use archiveis::ArchiveClient;
-use futures::future::Future;
-use tokio_core::reactor::Core;
-
-fn main() {
- let mut core = Core::new().unwrap();
-
- let client = ArchiveClient::new(Some("archiveis (https://github.com/MattsSe/archiveis-rs)"));
- let url = "http://example.com/";
- let capture = client.capture(url).and_then(|archived| {
-    println!("targeted url: {}", archived.target_url);
-    println!("url of archived site: {}", archived.archived_url);
-    println!("archive.is submit token: {}", archived.submit_token);
-    Ok(())
- });
-
- core.run(capture).unwrap();
+fn run() {
+    let client = ArchiveClient::default();
+    let url = "http://example.com/";
+    let work = client.capture(url).and_then(|(_, res)| {
+        if let Ok(archived) = res {
+            println!("targeted url: {}", archived.target_url);
+            println!("url of archived site: {}", archived.archived_url);
+            println!("archive.is submit token: {}", archived.submit_token);
+        }
+        Ok(())
+    });
+    hyper::rt::run(work.map_err(|_|()));
 }
 ```
-
-### Archive mutliple urls
-
+### Archive multiple urls
 archive.is uses a temporary token to validate a archive request.
-The `ArchiveClient` `capture` function first obtains a new submit token via a GET request.
-The token is usually valid several minutes, and even if archive.is switches to a new in the
-meantime token,the older ones are still valid. So if we need to archive multiple links,
-we can only need to obtain the token once and then invoke the capturing service directly with
-`capture_with_token` for each url. `capture_all` returns a Vec of Results of every capturing
-request, so every single capture request gets executed regardless of the success of prior requests.
+The `ArchiveClient` `capture` function first obtains a new submit token via a GET request. The token is usually valid several minutes, and even if archive.is switched to a new in the meantime token,the older ones are still valid. So if we need to archive multiple links, we can only need to obtain the token once and then invoke the capturing service directly with `capture_with_token` for each url. `capture_all` returns a Vec of Results of every capturing request, so every single capture request gets executed regardless of the success of prior requests.
 
-```rust
+
+```rust 
 extern crate archiveis;
-extern crate futures;
-extern crate tokio_core;
-
+extern crate hyper;
+use hyper::rt::Future;
 use archiveis::ArchiveClient;
-use futures::future::{join_all, Future};
-use tokio_core::reactor::Core;
-fn main() {
-    let mut core = Core::new().unwrap();
-
-    let client = ArchiveClient::new(Some("archiveis (https://github.com/MattsSe/archiveis-rs)"));
-
+fn run() {
+    let client = ArchiveClient::default();
+    
     // the urls to capture
     let urls = vec![
         "http://example.com/",
         "https://github.com/MattsSe/archiveis-rs",
         "https://crates.io",
     ];
-
-    let capture = client.capture_all(urls, None).and_then(|archives| {
-        let failures: Vec<_> = archives
-            .iter()
-            .map(Result::as_ref)
-            .filter(Result::is_err)
-            .map(Result::unwrap_err)
-            .collect();
+    
+    let work = client.capture_all(urls).and_then(|(_, res)|{
+        let (archived, failures): (Vec<_>, Vec<_>) = res
+                .into_iter()
+                .partition(Result::is_ok);
+        let archived: Vec<_> = archived.into_iter().map(Result::unwrap).collect();
+        let failures: Vec<_> = failures.into_iter().map(Result::unwrap_err).collect();
         if failures.is_empty() {
             println!("all links successfully archived.");
         } else {
-            for err in failures {
-                if let archiveis::Error::MissingUrl(url) = err {
+            for err in &failures {
+                if let archiveis::Error::MissingUrl(url) | archiveis::Error::ServerError(url) = err {
                     println!("Failed to archive url: {}", url);
                 }
             }
-        }
-        Ok(())
+       }
+       Ok(())
     });
-    core.run(capture).unwrap();
+    hyper::rt::run(work.map_err(|_|()));
 }
 ```
 
-## Commandline Interface
+## Commandline Application
 
-`archiveis` also comes as commandline application:
+Archive links using the `archiveis` commandline application
 
-Coming soon
+### Install
+
+```shell
+cargo install archiveis
+```
+
+### Usage
+```shell
+SUBCOMMANDS:
+    file     Archive all the links in the line separated text file
+    links    Archive all links provided as arguments
+```
+
+The `file` and `links` subcommands take the same flags and options (besides there primary target = links or a file)
+
+```shell
+USAGE:
+    archiveis links [FLAGS] [OPTIONS] -i <links>...
+
+FLAGS:
+    -a, --append             if the output file already exists, append instead of overwriting the file
+        --archives-only      save only the archive urls
+    -h, --help               Prints help information
+        --ignore-failures    continue anyway if after all retries some links are not successfully archived
+    -s, --silent             do not print anything
+    -t, --text               save output as line separated text instead of json
+    -V, --version            Prints version information
+
+OPTIONS:
+    -i <links>...          all links to should be archived via archive.is
+    -o <output>            save all archived elements
+    -r, --retries <retries>    how many times failed archive attempts should be tried again [default: 0]
+```
+
+Archive a set of links:
+
+```shell
+archiveis links -i "http://example.com/" "https://github.com/MattsSe/archiveis-rs"
+```
+
+Archive a set of links and safe result to `archived.json`, retry failed attempts twice:
+
+```shell
+archiveis links -i "http://example.com/" "https://github.com/MattsSe/archiveis-rs" -o archived.json --retries 2
+```
+
+Archive all line separated links in file `links.txt` and only safe the archive urls line separated to `archived.txt`
+
+```shell
+archiveis file -i links.txt -o archived.txt --text --archives-only
+```
+
+By default `archiveis` aborts and doesn't output anything if there are still failed archive attempts after all retries. To ignore failures add the `--ignore-failures` flag to write output without the failures.
+
+```shell
+archiveis file -i links.txt -o archived.json --ignore-failures
+```
+
+
+## License
+
+Licensed under either of these:
+
+ * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or
+   https://www.apache.org/licenses/LICENSE-2.0)
+ * MIT license ([LICENSE-MIT](LICENSE-MIT) or
+   https://opensource.org/licenses/MIT)
