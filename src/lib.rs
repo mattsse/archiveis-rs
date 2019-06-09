@@ -1,47 +1,44 @@
 //! # archiveis - Rust API Wrapper for Archive.is
 //! This crate provides simple access to the Archive.is Capturing Service.
 //! ## Quick Start
-//! ### Creating a Client
-//! To create a client to access the Archive.is Capturing Service, you should use the `ArchiveClient`
-//! struct. You can pass a specific user agent or none to use a default one.
-//! To capture a specific url all you need to do is call the `capture` function of the client provided
-//! with the desired url.
 //!
 //! ### Archive a url
-//! The `ArchiveClient` is build with `hyper` and therefor uses futures for its services.
+//! The `ArchiveClient` is build with `hyper` and uses futures for capturing archive.is links.
 //!
 //! ```edition2018
-//! extern crate archiveis;
-//! extern crate futures;
-//!
-//! use archiveis::ArchiveClient;
-//! use futures::future::Future;
-//!
+//! # extern crate archiveis;
+//! # extern crate hyper;
+//! # use archiveis::ArchiveClient;
+//! # use hyper::rt::Future;
+//! # fn run() {
 //! let client = ArchiveClient::default();
 //! let url = "http://example.com/";
-//! let capture = client.capture(url).and_then(|archived| {
-//!     println!("targeted url: {}", archived.target_url);
-//!     println!("url of archived site: {}", archived.archived_url);
-//!     println!("archive.is submit token: {}", archived.submit_token);
+//! let work = client.capture(url).and_then(|(_, res)| {
+//!     if let Ok(archived) = res {
+//!         println!("targeted url: {}", archived.target_url);
+//!         println!("url of archived site: {}", archived.archived_url);
+//!         println!("archive.is submit token: {}", archived.submit_token);
+//!     }
 //!     Ok(())
 //! });
+//! hyper::rt::run(work.map_err(|_|()));
+//! # }
 //! ```
 //! ### Archive multiple urls
 //! archive.is uses a temporary token to validate a archive request.
 //! The `ArchiveClient` `capture` function first obtains a new submit token via a GET request.
-//! The token is usually valid several minutes, and even if archive.is switches to a new in the
+//! The token is usually valid several minutes, and even if archive.is switched to a new in the
 //! meantime token,the older ones are still valid. So if we need to archive multiple links,
 //! we can only need to obtain the token once and then invoke the capturing service directly with
 //! `capture_with_token` for each url. `capture_all` returns a Vec of Results of every capturing
 //! request, so every single capture request gets executed regardless of the success of prior requests.
 //!
 //! ```edition2018
-//! extern crate archiveis;
-//! extern crate futures;
-//!
-//! use archiveis::ArchiveClient;
-//! use futures::future::{ Future};
-//!
+//! # extern crate archiveis;
+//! # extern crate hyper;
+//! # use archiveis::ArchiveClient;
+//! # use hyper::rt::Future;
+//! # fn run() {
 //! let client = ArchiveClient::default();
 //!
 //! // the urls to capture
@@ -51,29 +48,30 @@
 //!     "https://crates.io",
 //! ];
 //!
-//! let capture = client.capture_all(urls, None).and_then(|archives| {
-//!          let (archived, failures): (Vec<_>, Vec<_>) = archives
+//! let work = client.capture_all(urls).and_then(|(_, res)|{
+//!     let (archived, failures): (Vec<_>, Vec<_>) = res
 //!             .into_iter()
 //!             .partition(Result::is_ok);
-//!         let archived: Vec<_> = archived.into_iter().map(Result::unwrap).collect();
-//!         let failures: Vec<_> = failures.into_iter().map(Result::unwrap_err).collect();
-//!         if failures.is_empty() {
-//!             println!("all links successfully archived.");
-//!         } else {
-//!            for err in &failures {
-//!                 if let archiveis::Error::MissingUrl(url) = err {
-//!                     println!("Failed to archive url: {}", url);
-//!                 }
+//!     let archived: Vec<_> = archived.into_iter().map(Result::unwrap).collect();
+//!     let failures: Vec<_> = failures.into_iter().map(Result::unwrap_err).collect();
+//!     if failures.is_empty() {
+//!         println!("all links successfully archived.");
+//!     } else {
+//!         for err in &failures {
+//!             if let archiveis::Error::MissingUrl(url) | archiveis::Error::ServerError(url) = err {
+//!                 println!("Failed to archive url: {}", url);
 //!             }
 //!         }
-//!        Ok((archived, failures))
-//!    });
+//!    }
+//!    Ok(())
+//! });
 //!
-//! capture.wait();
+//! hyper::rt::run(work.map_err(|_|()));
+//! # }
 //! ```
 //!
 
-//#![deny(warnings)]
+#![deny(warnings)]
 #[macro_use]
 extern crate log;
 
@@ -82,9 +80,10 @@ use serde::{Deserialize, Serialize};
 
 use chrono::DateTime;
 use futures::future;
-use hyper::rt::{Future, Stream};
-use hyper::Client;
-use hyper::Request;
+use hyper::{
+    rt::{Future, Stream},
+    Client, Request,
+};
 
 /// The Error Type used in this crate
 #[derive(Debug)]

@@ -4,11 +4,13 @@ use archiveis::{ArchiveClient, Archived};
 use futures::future::Future;
 use hyper::http::Uri;
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
-use std::process::exit;
+use std::{
+    fs,
+    io::{BufRead, BufReader},
+    path::PathBuf,
+};
 
+#[deny(warnings)]
 #[allow(missing_docs)]
 #[derive(Debug, StructOpt)]
 #[structopt(
@@ -60,18 +62,18 @@ struct Opts {
     #[structopt(
         short = "a",
         long = "append",
-        help = "if the file already exists, append instead of overwriting the file"
+        help = "if the output file already exists, append instead of overwriting the file"
     )]
     append: bool,
     #[structopt(short = "s", long = "silent", help = "do not print anything")]
     silent: bool,
     #[structopt(
         short = "r",
-        long = "retry",
+        long = "retries",
         default_value = "0",
-        help = "retry failed archive attempts"
+        help = "how many times failed archive attempts should be tried again"
     )]
-    retry: usize,
+    retries: usize,
     #[structopt(
         long = "ignore-failures",
         help = "continue anyway if after all retries some links are not successfully archived"
@@ -81,7 +83,7 @@ struct Opts {
 
 impl Opts {
     pub(crate) fn write_output(&self, archives: Vec<Output>) {
-        use std::io::prelude::*;
+        use ::std::io::prelude::*;
         if let Some(out) = &self.output {
             let mut file = if self.append && out.exists() {
                 fs::OpenOptions::new().write(true).append(true).open(out)
@@ -148,7 +150,6 @@ impl From<Archived> for Output {
 fn main() -> Result<(), Box<dyn ::std::error::Error>> {
     pretty_env_logger::try_init()?;
     let app = App::from_args();
-    println!("{:?}", app);
 
     let client = ArchiveClient::default();
 
@@ -175,10 +176,10 @@ fn main() -> Result<(), Box<dyn ::std::error::Error>> {
         if !opts.silent {
             eprintln!("Nothing to archive.");
         }
-        exit(-1);
+        ::std::process::exit(1);
     }
 
-    let retries = opts.retry;
+    let retries = opts.retries;
 
     let work = client
         .get_unique_token()
@@ -233,6 +234,7 @@ fn main() -> Result<(), Box<dyn ::std::error::Error>> {
     Ok(())
 }
 
+/// returns a new future which will capture all links
 fn capture_links(
     client: ArchiveClient,
     links: Vec<String>,
@@ -252,6 +254,7 @@ fn capture_links(
     futures::future::join_all(futures).and_then(|archives| Ok((client, archives, token)))
 }
 
+/// retries capturing until are `retries` are exhausted or every link was archived successfully.
 fn fold_captures(
     client: ArchiveClient,
     archives: Vec<archiveis::Result<Archived>>,
