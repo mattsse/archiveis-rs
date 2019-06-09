@@ -218,7 +218,7 @@ fn main() -> Result<(), Box<dyn ::std::error::Error>> {
 
                 if !opts.silent {
                     for success in &successes {
-                        println!("Archived {} -->  {}", success.target, success.archive);
+                        println!("Archived {}  -->  {}", success.target, success.archive);
                     }
                 }
 
@@ -245,7 +245,7 @@ fn capture_links(
     for url in links {
         futures.push(
             client
-                .capture_with_token_arc(url.into(), token.clone())
+                .capture_with_token(url.into(), token.clone())
                 .then(Ok),
         );
     }

@@ -13,8 +13,8 @@ Archive websites online using the archive.is capturing service.
 """
 edition = "2018"
 [[bin]]
-name = "archiver"
-path = "src/archiver.rs"
+name = "archiveis"
+path = "src/archiveis.rs"
 required-features = ["cli"]
 
 [dependencies]
