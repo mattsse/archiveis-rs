@@ -78,7 +78,7 @@ Archive links using the `archiveis` commandline application
 ### Install
 
 ```shell
-cargo install archiveis
+cargo install archiveis --features cli
 ```
 
 ### Usage
