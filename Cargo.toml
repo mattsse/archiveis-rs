@@ -1,7 +1,7 @@
 [package]
 authors = ["Matthias Seitz <matthias.seitz@tum.de>"]
 name = "archiveis"
-version = "0.2.2"
+version = "0.3.0"
 license = "MIT OR Apache-2.0"
 documentation = "https://docs.rs/archiveis"
 repository = "https://github.com/mattsse/archiveis-rs"
