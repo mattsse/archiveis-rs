@@ -84,12 +84,14 @@ use hyper::{
     rt::{Future, Stream},
     Client, Request,
 };
+use std::rc::Rc;
+use reqwest::{header };
 
 /// The Error Type used in this crate
 #[derive(Debug)]
 pub enum Error {
     /// Represents an error originated from hyper
-    Hyper(hyper::Error),
+    Reqwest(reqwest::Error),
     /// Means that no token could be obtained from archive.is
     MissingToken,
     /// Means that the POST was successful but no archive url to the requested
@@ -97,6 +99,12 @@ pub enum Error {
     MissingUrl(String),
     /// An error occurred on the archiveis server while archiving an url
     ServerError(String),
+}
+
+impl From<reqwest::Error> for Error {
+    fn from(err: reqwest::Error) -> Self {
+        Error::Reqwest(err)
+    }
 }
 
 /// Result type for this crate
@@ -119,17 +127,19 @@ pub struct Archived {
 /// A Client that serves as a wrapper around the archive.is capture service
 pub struct ArchiveClient {
     /// The internal Hyper Http Client.
-    client: Client<hyper::client::HttpConnector, hyper::Body>,
-    /// The user agent used for the HTTP Requests
-    user_agent: String,
+    client: Rc<reqwest::Client>
 }
 
 impl ArchiveClient {
     /// Creates a new instance of the `ArchiveClient` using a special user agent
-    pub fn new<T: Into<String>>(user_agent: T) -> Self {
+    pub fn new<T: ToString>(user_agent: T) -> Self {
+
+        let mut headers = header::HeaderMap::with_capacity(1);
+        headers.insert(header::USER_AGENT, user_agent.to_string());
+        let client = reqwest::ClientBuilder::default().headers(headers).build().unwrap();
+
         ArchiveClient {
-            client: Client::new(),
-            user_agent: user_agent.into(),
+            client : Rc::new(client)
         }
     }
 
@@ -213,7 +223,7 @@ impl ArchiveClient {
 
         self.client
             .request(req)
-            .map_err(Error::Hyper)
+            .map_err(Error::Reqwest)
             .and_then(move |resp| {
                 // get the url of the archived page
                 let archived_url = resp.headers().get("Refresh").and_then(|x| {
@@ -247,7 +257,7 @@ impl ArchiveClient {
                         let err_resp_handling = resp
                             .into_body()
                             .concat2()
-                            .map_err(Error::Hyper)
+                            .map_err(Error::Reqwest)
                             .and_then(move |ch| {
                                 if let Ok(html) = ::std::str::from_utf8(&ch) {
                                     if html.starts_with("<h1>Server Error</h1>") {
@@ -290,34 +300,23 @@ impl ArchiveClient {
     /// unique token.
     /// This is achieved by sending a GET request to the archive.is domain and parsing the `
     /// `submitid` from the responding html.
-    pub fn get_unique_token(&self) -> impl Future<Item = String, Error = Error> + Send {
+    pub async fn get_unique_token(&self) -> Result<String> {
         let req = Request::get("http://archive.is/")
             .header("User-Agent", self.user_agent.as_str())
             .body(hyper::Body::empty())
             .unwrap();
 
-        self.client
-            .request(req)
-            .map_err(Error::Hyper)
-            .and_then(|res| {
-                res.into_body()
-                    .concat2()
-                    .map_err(Error::Hyper)
-                    .and_then(|ch| {
-                        ::std::str::from_utf8(&ch)
-                            .map_err(|_| Error::MissingToken)
-                            .and_then(|html| {
-                                html.rsplitn(2, "name=\"submitid")
-                                    .next()
-                                    .and_then(|x| {
-                                        x.splitn(2, "value=\"").nth(1).and_then(|token| {
-                                            token.splitn(2, '\"').next().map(str::to_string)
-                                        })
-                                    })
-                                    .ok_or(Error::MissingToken)
-                            })
-                    })
+        let html = self.client.get("http://archive.is/").send().await?.text().await.map_err(|_| Error::MissingToken)?;
+
+        html.rsplitn(2, "name=\"submitid")
+            .next()
+            .and_then(|x| {
+                x.splitn(2, "value=\"").nth(1).and_then(|token| {
+                    token.splitn(2, '\"').next().map(str::to_string)
+                })
             })
+            .ok_or(Error::MissingToken)
+
     }
 }
 
