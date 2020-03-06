@@ -1,7 +1,8 @@
 use structopt::StructOpt;
+use tokio::prelude::*;
 
 use archiveis::{ArchiveClient, Archived};
-use futures::future::Future;
+use futures::{Future, FutureExt, StreamExt, TryFutureExt};
 use hyper::http::Uri;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -147,6 +148,8 @@ impl From<Archived> for Output {
     }
 }
 
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn main() -> Result<(), Box<dyn ::std::error::Error>> {
     pretty_env_logger::try_init()?;
     let app = App::from_args();
@@ -179,13 +182,27 @@ fn main() -> Result<(), Box<dyn ::std::error::Error>> {
         ::std::process::exit(1);
     }
 
+
+
+    let token = client
+        .get_unique_token().await?;
+    let archived = stream::iter(
+        links
+            .into_iter()
+            .map(|url| client.capture_with_token(url, &token),
+    )
+        .buffer_unordered(10)
+        .collect::<Vec<_>>()
+        .await;
+
     let retries = opts.retries;
+
 
     let work = client
         .get_unique_token()
         .and_then(move |token| {
             capture_links(client, links.iter().map(|x| x.to_string()).collect(), token).and_then(
-                move |(client, archives, token)| fold_captures(client, archives, retries, token),
+                move |(client, archives, token)| retry(client, archives, retries, token),
             )
         })
         .map_err(|_| ())
@@ -234,54 +251,36 @@ fn main() -> Result<(), Box<dyn ::std::error::Error>> {
     Ok(())
 }
 
-/// returns a new future which will capture all links
-fn capture_links(
-    client: ArchiveClient,
-    links: Vec<String>,
-    token: String,
-) -> impl Future<
-    Item = (ArchiveClient, Vec<archiveis::Result<Archived>>, String),
-    Error = archiveis::Error,
-> + Send {
-    let mut futures = Vec::with_capacity(links.len());
-    for url in links {
-        futures.push(
-            client
-                .capture_with_token(url.into(), token.clone())
-                .then(Ok),
-        );
-    }
-    futures::future::join_all(futures).and_then(|archives| Ok((client, archives, token)))
-}
 
 /// retries capturing until are `retries` are exhausted or every link was archived successfully.
-fn fold_captures(
-    client: ArchiveClient,
+ async fn retry(
+    client: &ArchiveClient,
     archives: Vec<archiveis::Result<Archived>>,
-    retries: usize,
+    mut retries: usize,
     token: String,
-) -> Box<dyn Future<Item = Vec<archiveis::Result<Archived>>, Error = archiveis::Error> + Send> {
-    if archives.iter().all(Result::is_ok) || retries == 0 {
-        Box::new(futures::future::ok(archives))
-    } else {
-        let (mut archived, failures): (Vec<_>, Vec<_>) =
+) ->  Vec<archiveis::Result<Archived>> {
+        let (mut archived, mut failures): (Vec<_>, Vec<_>) =
             archives.into_iter().partition(Result::is_ok);
+        while retries > 0 || !failures.is_empty() {
+            for idx in (0..failures.len()).rev() {
+                let  failure = failures.swap_remove(idx).unwrap();
+                let url = match failure {
+                    archiveis::Error::ServerError(url) | archiveis::Error::MissingUrl(url) => Some(url),
+                    _ => continue,
+                };
 
-        let failures: Vec<_> = failures
-            .into_iter()
-            .map(Result::unwrap_err)
-            .filter_map(|x| match x {
-                archiveis::Error::ServerError(url) | archiveis::Error::MissingUrl(url) => Some(url),
-                _ => None,
-            })
-            .collect();
+                if let Some(url) = url {
+                    if let Ok(archive) = client.capture(&url){
+                        archived.push(archive)
+                    } else {
+                        failures.push(Err(archiveis::Error::MissingUrl(url)))
+                    }
+                }
+                retries-=1;
+            }
+        }
+        archived.extend(failures.into_iter());
+        archived
 
-        let work =
-            capture_links(client, failures, token).and_then(move |(client, captures, token)| {
-                archived.extend(captures.into_iter());
-                fold_captures(client, archived, retries - 1, token)
-            });
-
-        Box::new(work)
     }
 }
