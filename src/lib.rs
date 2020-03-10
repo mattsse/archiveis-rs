@@ -5,22 +5,21 @@
 //! ### Archive a url
 //! The `ArchiveClient` is build with `hyper` and uses futures for capturing archive.is links.
 //!
-//! ```edition2018
+//! ```no_run
 //! # use archiveis::ArchiveClient;
 //! # use tokio::prelude::*;
 //! #
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let client = ArchiveClient::default();
-//! let url = ;
-//! if let Ok(archived) = client.capture("http://example.com/").await? {
-//!         println!("targeted url: {}", archived.target_url);
-//!         println!("url of archived site: {}", archived.archived_url);
-//!         println!("archive.is submit token: {}", archived.submit_token);
-//! }
+//! let archived = client.capture("http://example.com/").await?;
+//! println!("targeted url: {}", archived.target_url);
+//! println!("url of archived site: {}", archived.archived_url);
+//! println!("archive.is submit token: {}", archived.submit_token);
 //! # Ok(())
 //! # }
 //! ```
+//!
 //! ### Archive multiple urls
 //! archive.is uses a temporary token to validate a archive request.
 //! The `ArchiveClient` `capture` function first obtains a new submit token via a GET request.
@@ -30,7 +29,7 @@
 //! `capture_with_token` for each url. `capture_all` returns a Vec of Results of every capturing
 //! request, so every single capture request gets executed regardless of the success of prior requests.
 //!
-//! ```edition2018
+//! ```no_run
 //! # use archiveis::ArchiveClient;
 //! # use tokio::prelude::*;
 //! #
@@ -45,7 +44,7 @@
 //!     "https://crates.io",
 //! ];
 //!
-//! let archives = client.capture_all(urls).await?.into_iter()
+//! let (archived, failures) : (Vec<_>, Vec<_>) = client.capture_all(urls).await?.into_iter()
 //!             .partition(Result::is_ok);
 //!
 //! let archived: Vec<_> = archived.into_iter().map(Result::unwrap).collect();
@@ -71,12 +70,12 @@ extern crate log;
 #[cfg(feature = "with-serde")]
 use serde::{Deserialize, Serialize};
 
+use chrono::offset::TimeZone;
 use chrono::DateTime;
-use futures::{Future, FutureExt, StreamExt, TryFutureExt};
+use futures::{stream, StreamExt};
 use reqwest::{header, IntoUrl};
-use std::rc::Rc;
 use std::fmt;
-use serde::export::Formatter;
+use std::rc::Rc;
 
 /// The Error Type used in this crate
 #[derive(Debug)]
@@ -101,9 +100,12 @@ impl From<reqwest::Error> for Error {
 impl std::error::Error for Error {}
 
 impl fmt::Display for Error {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Error::MissingToken => write!(f, "Missing required token."),
+            Error::Reqwest(err) => err.fmt(f),
+            Error::MissingUrl(url) => write!(f, "Missing archiveis url after archiving {}", url),
+            Error::ServerError(url) => write!(f, "Encountered server error for {}", url),
         }
     }
 }
@@ -135,11 +137,17 @@ impl ArchiveClient {
     /// Creates a new instance of the `ArchiveClient` using a special user agent
     pub fn new<T: ToString>(user_agent: T) -> Self {
         let mut headers = header::HeaderMap::with_capacity(1);
-        headers.insert(header::USER_AGENT, user_agent.to_string());
+        headers.insert(
+            header::USER_AGENT,
+            user_agent
+                .to_string()
+                .parse()
+                .expect("Failed to parse user agent."),
+        );
         let client = reqwest::ClientBuilder::default()
-            .headers(headers)
+            .default_headers(headers)
             .build()
-            .unwrap();
+            .expect("Failed to create reqwest client");
 
         ArchiveClient {
             client: Rc::new(client),
@@ -153,17 +161,17 @@ impl ArchiveClient {
     /// a `Vec<Result<Archived, Error>>` which holds every result of the individual
     /// capturing requests, so every single capture request gets executed regardless
     /// of the success of prior requests.
-    pub async fn capture_all<U: IntoUrl>(self, links: Vec<T>) -> Vec<Result<Archived>> {
+    pub async fn capture_all<U: IntoUrl>(self, links: Vec<U>) -> Result<Vec<Result<Archived>>> {
         let token = self.get_unique_token().await?;
 
-        stream::iter(
+        Ok(stream::iter(
             links
                 .into_iter()
-                .map(|url| self.capture_with_token(url, token.clone())),
+                .map(|url| async { self.capture_with_token(url, token.clone()).await }),
         )
         .buffer_unordered(10)
         .collect::<Vec<_>>()
-        .await
+        .await)
     }
 
     /// Invokes the archive.is capture service.
@@ -173,8 +181,9 @@ impl ArchiveClient {
     /// The link to the archived page is then contained in the `Refresh` header of the Response.
     /// It also tries to parse the timemap from the `Date` header and packs it together with the url
     /// in a new `Archived` instance.
-    pub async fn capture<U: IntoUrl>(self, url: U) -> Result<Archived> {
+    pub async fn capture<U: IntoUrl>(&self, url: U) -> Result<Archived> {
         self.capture_with_token(url, self.get_unique_token().await?)
+            .await
     }
 
     /// Invokes the archive.is capture service directly without retrieving a submit id first.
@@ -194,14 +203,19 @@ impl ArchiveClient {
         submit_token: T,
     ) -> Result<Archived> {
         let target_url = url.into_url()?;
-        let submit_token = submit_token.into();
+        let submit_token = submit_token.to_string();
         let body: String = url::form_urlencoded::Serializer::new(String::new())
             .append_pair("url", target_url.as_str())
             .append_pair("anyway", "1")
             .append_pair("submitid", &submit_token)
             .finish();
 
-        let resp = self.client.post(url).body(body).send().await?;
+        let resp = self
+            .client
+            .post(target_url.clone())
+            .body(body)
+            .send()
+            .await?;
 
         if let Some(archived_url) = resp.headers().get("Refresh").and_then(|x| {
             x.to_str()
@@ -215,10 +229,10 @@ impl ArchiveClient {
                     .and_then(|x| chrono::Utc.datetime_from_str(x, "%a, %e %b %Y %T GMT").ok())
             });
             let archived = Archived {
-                target_url,
+                target_url: target_url.to_string(),
                 archived_url,
                 time_stamp,
-                submit_token,
+                submit_token: submit_token.to_string(),
             };
             debug!(
                 "Archived target url {} at {}",
@@ -234,7 +248,7 @@ impl ArchiveClient {
                 if html.starts_with("<h1>Server Error</h1>") {
                     error!("Server Error while archiving {}", target_url);
 
-                    return Err(Error::ServerError(target_url));
+                    return Err(Error::ServerError(target_url.to_string()));
                 }
                 let archived_url =
                     html.splitn(2, "<meta property=\"og:url\"")
@@ -246,10 +260,10 @@ impl ArchiveClient {
                         });
                 if let Some(archived_url) = archived_url {
                     let archived = Archived {
-                        target_url,
+                        target_url: target_url.to_string(),
                         archived_url,
                         time_stamp: None,
-                        submit_token,
+                        submit_token: submit_token.to_string(),
                     };
                     debug!(
                         "Archived target url {} at {}",
@@ -269,11 +283,6 @@ impl ArchiveClient {
     /// This is achieved by sending a GET request to the archive.is domain and parsing the `
     /// `submitid` from the responding html.
     pub async fn get_unique_token(&self) -> Result<String> {
-        let req = Request::get("http://archive.is/")
-            .header("User-Agent", self.user_agent.as_str())
-            .body(hyper::Body::empty())
-            .unwrap();
-
         let html = self
             .client
             .get("http://archive.is/")

@@ -1,15 +1,14 @@
 use structopt::StructOpt;
-use tokio::prelude::*;
 
 use archiveis::{ArchiveClient, Archived};
-use futures::{Future, FutureExt, StreamExt, TryFutureExt};
-use hyper::http::Uri;
+use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
     io::{BufRead, BufReader},
     path::PathBuf,
 };
+use url::Url;
 
 #[deny(warnings)]
 #[allow(missing_docs)]
@@ -18,17 +17,16 @@ use std::{
     name = "archive",
     about = "Archive urls using the archive.is capturing service."
 )]
-#[structopt(raw(setting = "structopt::clap::AppSettings::ColoredHelp"))]
+#[structopt(setting = structopt::clap::AppSettings::ColoredHelp)]
 enum App {
     #[structopt(name = "links", about = "Archive all links provided as arguments")]
     Links {
         #[structopt(
-            raw(required = "true"),
             short = "i",
             parse(try_from_str),
             help = "all links to should be archived via archive.is"
         )]
-        links: Vec<Uri>,
+        links: Vec<Url>,
         #[structopt(flatten)]
         opts: Opts,
     },
@@ -150,7 +148,6 @@ impl From<Archived> for Output {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-fn main() -> Result<(), Box<dyn ::std::error::Error>> {
     pretty_env_logger::try_init()?;
     let app = App::from_args();
 
@@ -166,7 +163,7 @@ fn main() -> Result<(), Box<dyn ::std::error::Error>> {
                 .map(Result::unwrap)
                 .map(|link| {
                     link.trim()
-                        .parse::<Uri>()
+                        .parse::<Url>()
                         .expect(&format!("Link {} is no valid uri.", link))
                 })
                 .collect::<Vec<_>>();
@@ -182,105 +179,83 @@ fn main() -> Result<(), Box<dyn ::std::error::Error>> {
         ::std::process::exit(1);
     }
 
-
-
-    let token = client
-        .get_unique_token().await?;
-    let archived = stream::iter(
+    let token = client.get_unique_token().await?;
+    let archives = stream::iter(
         links
             .into_iter()
-            .map(|url| client.capture_with_token(url, &token),
+            .map(|url| async { client.capture_with_token(url, &token).await }),
     )
-        .buffer_unordered(10)
-        .collect::<Vec<_>>()
-        .await;
+    .buffer_unordered(10)
+    .collect::<Vec<_>>()
+    .await;
 
-    let retries = opts.retries;
+    let archives = retry(&client, archives, opts.retries).await;
 
-
-    let work = client
-        .get_unique_token()
-        .and_then(move |token| {
-            capture_links(client, links.iter().map(|x| x.to_string()).collect(), token).and_then(
-                move |(client, archives, token)| retry(client, archives, retries, token),
-            )
-        })
-        .map_err(|_| ())
-        .and_then(move |archives| {
-            if archives.iter().any(Result::is_err) && !opts.ignore_failures {
-                if !opts.silent {
-                    let failures: Vec<_> = archives
-                        .into_iter()
-                        .filter(Result::is_err)
-                        .map(Result::unwrap_err)
-                        .filter_map(|x| match x {
-                            archiveis::Error::ServerError(url)
-                            | archiveis::Error::MissingUrl(url) => Some(url),
-                            _ => None,
-                        })
-                        .collect();
-                    eprintln!("Failed to archive links: {:?}", failures);
-                }
-                Err(())
-            } else {
-                let successes: Vec<Output> = archives
-                    .into_iter()
-                    .filter_map(|x| {
-                        if let Ok(archive) = x {
-                            Some(archive.into())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-
-                if !opts.silent {
-                    for success in &successes {
-                        println!("Archived {}  -->  {}", success.target, success.archive);
+    if archives.iter().any(Result::is_err) && !opts.ignore_failures {
+        if !opts.silent {
+            let failures: Vec<_> = archives
+                .into_iter()
+                .filter(Result::is_err)
+                .map(Result::unwrap_err)
+                .filter_map(|x| match x {
+                    archiveis::Error::ServerError(url) | archiveis::Error::MissingUrl(url) => {
+                        Some(url)
                     }
+                    _ => None,
+                })
+                .collect();
+            eprintln!("Failed to archive links: {:?}", failures);
+        }
+    } else {
+        let successes: Vec<Output> = archives
+            .into_iter()
+            .filter_map(|x| {
+                if let Ok(archive) = x {
+                    Some(archive.into())
+                } else {
+                    None
                 }
+            })
+            .collect();
 
-                opts.write_output(successes);
-
-                Ok(())
+        if !opts.silent {
+            for success in &successes {
+                println!("Archived {}  -->  {}", success.target, success.archive);
             }
-        });
+        }
 
-    hyper::rt::run(work);
+        opts.write_output(successes);
+    }
 
     Ok(())
 }
 
-
 /// retries capturing until are `retries` are exhausted or every link was archived successfully.
- async fn retry(
+async fn retry(
     client: &ArchiveClient,
     archives: Vec<archiveis::Result<Archived>>,
     mut retries: usize,
-    token: String,
-) ->  Vec<archiveis::Result<Archived>> {
-        let (mut archived, mut failures): (Vec<_>, Vec<_>) =
-            archives.into_iter().partition(Result::is_ok);
-        while retries > 0 || !failures.is_empty() {
-            for idx in (0..failures.len()).rev() {
-                let  failure = failures.swap_remove(idx).unwrap();
-                let url = match failure {
-                    archiveis::Error::ServerError(url) | archiveis::Error::MissingUrl(url) => Some(url),
-                    _ => continue,
-                };
+) -> Vec<archiveis::Result<Archived>> {
+    let (mut archived, mut failures): (Vec<_>, Vec<_>) =
+        archives.into_iter().partition(Result::is_ok);
+    while retries > 0 || !failures.is_empty() {
+        for idx in (0..failures.len()).rev() {
+            let failure = failures.swap_remove(idx).unwrap_err();
+            let url = match failure {
+                archiveis::Error::ServerError(url) | archiveis::Error::MissingUrl(url) => Some(url),
+                _ => continue,
+            };
 
-                if let Some(url) = url {
-                    if let Ok(archive) = client.capture(&url){
-                        archived.push(archive)
-                    } else {
-                        failures.push(Err(archiveis::Error::MissingUrl(url)))
-                    }
+            if let Some(url) = url {
+                if let Ok(archive) = client.capture(&url).await {
+                    archived.push(Ok(archive))
+                } else {
+                    failures.push(Err(archiveis::Error::MissingUrl(url)))
                 }
-                retries-=1;
             }
+            retries -= 1;
         }
-        archived.extend(failures.into_iter());
-        archived
-
     }
+    archived.extend(failures.into_iter());
+    archived
 }
