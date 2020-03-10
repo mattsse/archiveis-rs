@@ -1,7 +1,7 @@
 [package]
 authors = ["Matthias Seitz <matthias.seitz@tum.de>"]
 name = "archiveis"
-version = "0.3.0"
+version = "0.4.0"
 license = "MIT OR Apache-2.0"
 documentation = "https://docs.rs/archiveis"
 repository = "https://github.com/mattsse/archiveis-rs"
@@ -12,27 +12,30 @@ description = """
 Archive websites online using the archive.is capturing service.
 """
 edition = "2018"
+
 [[bin]]
 name = "archiveis"
 path = "src/archiveis.rs"
 required-features = ["cli"]
 
+[badges]
+travis-ci = { repository = "mattsse/archiveis-rs" }
+
 [dependencies]
-hyper = "0.12"
-futures = "0.1"
-url = "1.7"
+futures = "0.3"
+url = "2.1"
 chrono = "0.4"
-clap = "2.33"
-structopt = { version = "0.2", optional = true }
-pretty_env_logger = { version = "0.3", optional = true }
+structopt = { version = "0.3", optional = true }
+pretty_env_logger = { version = "0.4", optional = true }
 log = "0.4"
 serde_json = { version = "1.0", optional = true }
 serde = { version = "1.0", optional = true, features = ["derive"] }
+reqwest = "0.10"
+tokio = { version = "0.2", optional = true, features = ["macros"] }
 
-
-[badges]
-travis-ci = { repository = "MattsSe/archiveis-rs" }
+[dev-dependencies]
+tokio = { version = "0.2", features = ["macros"] }
 
 [features]
 with-serde = ["serde", "chrono/serde"]
-cli = ["structopt", "pretty_env_logger", "with-serde", "serde_json"]
+cli = ["structopt", "pretty_env_logger", "with-serde", "serde_json", "tokio"]
