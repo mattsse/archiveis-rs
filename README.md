@@ -12,35 +12,31 @@ Archive any url and get the corresponding archive.is link in return.
 The `ArchiveClient` is build with `hyper` and uses futures for capturing archive.is links.
 
 ```rust
-extern crate archiveis;
-extern crate hyper;
-use hyper::rt::Future;
 use archiveis::ArchiveClient;
-fn run() {
+use tokio::prelude::*;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = ArchiveClient::default();
-    let url = "http://example.com/";
-    let work = client.capture(url).and_then(|(_, res)| {
-        if let Ok(archived) = res {
-            println!("targeted url: {}", archived.target_url);
-            println!("url of archived site: {}", archived.archived_url);
-            println!("archive.is submit token: {}", archived.submit_token);
-        }
-        Ok(())
-    });
-    hyper::rt::run(work.map_err(|_|()));
+    let archived = client.capture("http://example.com/").await?;
+    println!("targeted url: {}", archived.target_url);
+    println!("url of archived site: {}", archived.archived_url);
+    println!("archive.is submit token: {}", archived.submit_token);
+    Ok(())
 }
 ```
+
 ### Archive multiple urls
 archive.is uses a temporary token to validate a archive request.
 The `ArchiveClient` `capture` function first obtains a new submit token via a GET request. The token is usually valid several minutes, and even if archive.is switched to a new in the meantime token,the older ones are still valid. So if we need to archive multiple links, we can only need to obtain the token once and then invoke the capturing service directly with `capture_with_token` for each url. `capture_all` returns a Vec of Results of every capturing request, so every single capture request gets executed regardless of the success of prior requests.
 
 
 ```rust 
-extern crate archiveis;
-extern crate hyper;
-use hyper::rt::Future;
 use archiveis::ArchiveClient;
-fn run() {
+use tokio::prelude::*;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = ArchiveClient::default();
     
     // the urls to capture
@@ -50,24 +46,21 @@ fn run() {
         "https://crates.io",
     ];
     
-    let work = client.capture_all(urls).and_then(|(_, res)|{
-        let (archived, failures): (Vec<_>, Vec<_>) = res
-                .into_iter()
+    let (archived, failures) : (Vec<_>, Vec<_>) = client.capture_all(urls).await?.into_iter()
                 .partition(Result::is_ok);
-        let archived: Vec<_> = archived.into_iter().map(Result::unwrap).collect();
-        let failures: Vec<_> = failures.into_iter().map(Result::unwrap_err).collect();
-        if failures.is_empty() {
-            println!("all links successfully archived.");
-        } else {
-            for err in &failures {
-                if let archiveis::Error::MissingUrl(url) | archiveis::Error::ServerError(url) = err {
-                    println!("Failed to archive url: {}", url);
-                }
+    
+    let archived: Vec<_> = archived.into_iter().map(Result::unwrap).collect();
+    let failures: Vec<_> = failures.into_iter().map(Result::unwrap_err).collect();
+    if failures.is_empty() {
+        println!("all links successfully archived.");
+    } else {
+        for err in &failures {
+            if let archiveis::Error::MissingUrl(url) | archiveis::Error::ServerError(url) = err {
+                println!("Failed to archive url: {}", url);
             }
-       }
-       Ok(())
-    });
-    hyper::rt::run(work.map_err(|_|()));
+        }
+    }
+    Ok(())
 }
 ```
 
