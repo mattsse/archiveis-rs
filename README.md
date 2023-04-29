@@ -13,7 +13,6 @@ The `ArchiveClient` is build with `hyper` and uses futures for capturing archive
 
 ```rust
 use archiveis::ArchiveClient;
-use tokio::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -33,7 +32,6 @@ The `ArchiveClient` `capture` function first obtains a new submit token via a GE
 
 ```rust 
 use archiveis::ArchiveClient;
-use tokio::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

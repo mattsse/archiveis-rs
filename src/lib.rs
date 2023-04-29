@@ -7,7 +7,6 @@
 //!
 //! ```no_run
 //! # use archiveis::ArchiveClient;
-//! # use tokio::prelude::*;
 //! #
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -31,7 +30,6 @@
 //!
 //! ```no_run
 //! # use archiveis::ArchiveClient;
-//! # use tokio::prelude::*;
 //! #
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
