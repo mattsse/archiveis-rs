@@ -217,29 +217,33 @@ impl ArchiveClient {
             .send()
             .await?;
 
-        if let Some(archived_url) = resp.headers().get("Refresh").and_then(|x| {
-            x.to_str()
-                .ok()
-                .and_then(|x| x.split('=').nth(1).map(str::to_string))
-        }) {
-            // parse the timemap from the Date header
-            let time_stamp = resp.headers().get("Date").and_then(|x| {
-                x.to_str()
-                    .ok()
-                    .and_then(|x| chrono::Utc.datetime_from_str(x, "%a, %e %b %Y %T GMT").ok())
-            });
-            let archived = Archived {
-                target_url: target_url.to_string(),
-                archived_url,
-                time_stamp,
-                submit_token: submit_token.to_string(),
-            };
-            debug!(
-                "Archived target url {} at {}",
-                archived.target_url, archived.archived_url
-            );
+        if resp.status().is_redirection() {
+            // resp.headers().get("location") as String
+            if let Some(archived_url) = resp
+                .headers()
+                .get("Refresh")
+                .and_then(|x| x.to_str().ok().map(|s| s.to_string()))
+            {
+                let time_stamp = resp.headers().get("Date").and_then(|x| {
+                    x.to_str()
+                        .ok()
+                        .and_then(|x| chrono::Utc.datetime_from_str(x, "%a, %e %b %Y %T GMT").ok())
+                });
+                let archived = Archived {
+                    target_url: target_url.to_string(),
+                    archived_url,
+                    time_stamp,
+                    submit_token: submit_token.to_string(),
+                };
+                debug!(
+                    "Archived target url {} at {}",
+                    archived.target_url, archived.archived_url
+                );
 
-            return Ok(archived);
+                return Ok(archived);
+            }
+            error!("Missing url after archiving {}", target_url);
+            return Err(Error::MissingUrl(target_url.into()));
         } else {
             // an err response body can be empty, contain Server Error or
             // can directly contain the archived site, in that case we extract the archived_url
