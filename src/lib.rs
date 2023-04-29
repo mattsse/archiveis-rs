@@ -273,7 +273,7 @@ impl ArchiveClient {
                 }
             }
             error!("Failed to archive {}", target_url);
-            return Err(Error::MissingUrl(target_url.into_string()));
+            return Err(Error::MissingUrl(target_url.into()));
         }
     }
 
